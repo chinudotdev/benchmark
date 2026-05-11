@@ -28,6 +28,7 @@ export interface BenchmarkOptions {
   dockerImage?: string;
   gpuIds?: string;
   stream?: boolean;
+  force?: boolean;
 }
 
 export interface GpuInfo {

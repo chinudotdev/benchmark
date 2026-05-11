@@ -44,6 +44,7 @@ program
   .option("--docker-image <image>", "Docker image to use (default: vllm/vllm-openai:latest)")
   .option("--gpu-ids <ids>", "GPU IDs for Docker (default: all). e.g. \"device=0\" or \"0,1\"")
   .option("--stream", "Use streaming requests for benchmark (default: false)")
+  .option("--force", "Re-run benchmarks even if results already exist")
   .option("--dry-run", "Print commands without executing")
   .action(async (opts) => {
     await runBenchmarkCommand({
@@ -65,6 +66,7 @@ program
       dockerImage: opts.dockerImage,
       gpuIds: opts.gpuIds,
       stream: opts.stream === true,
+      force: opts.force === true,
     });
   });
 

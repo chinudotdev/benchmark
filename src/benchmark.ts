@@ -738,12 +738,12 @@ async function benchmarkModel(
     return;
   }
 
-  const safeName = model.name.replace(/[/\\s]/g, "_");
+  const safeName = model.name.replace(/[\/\\\s]/g, "_");
   const resultFile = resolve(join(opts.resultsDir, `${safeName}.json`));
 
-  // Check if already benchmarked
-  if (existsSync(resultFile) && !opts.dryRun) {
-    warn(`Result already exists: ${resultFile} (delete to re-run)`);
+  // Check if already benchmarked (skip unless --force)
+  if (existsSync(resultFile) && !opts.dryRun && !opts.force) {
+    warn(`Result already exists: ${resultFile} — use --force to re-run`);
     return;
   }
 
