@@ -499,7 +499,6 @@ async function startServer(
 
   args.push(
     image,
-    "serve",
     modelId,
     "--trust-remote-code",
     "--tensor-parallel-size", String(tp),
