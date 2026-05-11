@@ -105,7 +105,8 @@ const DEPS: Record<string, { aptPackage: string | null; note?: string }> = {
 
 function checkCommand(name: string): boolean {
   try {
-    const result = Bun.spawnSync(["command", "-v", name], {
+    // 'command -v' is a shell builtin — must run via sh -c
+    const result = Bun.spawnSync(["sh", "-c", `command -v ${name}`], {
       stdout: "ignore",
       stderr: "ignore",
     });
