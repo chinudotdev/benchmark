@@ -60,7 +60,8 @@ async function spawn(
       stdout: opts?.stdout ?? "pipe",
       stderr: opts?.stderr ?? "pipe",
     });
-    const stdout = opts?.stdout === "pipe"
+    const stdoutMode = opts?.stdout ?? "pipe";
+    const stdout = stdoutMode === "pipe"
       ? await new Response(proc.stdout).text()
       : "";
     const exitCode = await proc.exited;
