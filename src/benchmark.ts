@@ -370,6 +370,13 @@ async function downloadModel(modelId: string, hfToken: string | undefined, dryRu
 
   log(`Downloading ${modelId} (this may take a while)...`);
 
+  // Fix cache dir permissions if owned by root (e.g. from sudo docker runs)
+  if (existsSync(cacheDir)) {
+    const { stdout: whoami } = await spawn(["whoami"]);
+    const user = whoami || "ubuntu";
+    await spawn(["sudo", "chown", "-R", `${user}:${user}`, cacheDir]);
+  }
+
   // Ensure huggingface_hub is available
   const pipProc = Bun.spawn(
     ["python3", "-m", "pip", "install", "-q", "huggingface_hub[hf_xet]"],
@@ -572,8 +579,18 @@ async function waitForServer(
     );
 
     if (status === "exited") {
-      error("Container exited unexpectedly. Check logs:");
-      console.log(`  docker logs vllm_bench_${port}`);
+      error("Container exited unexpectedly.");
+      // Auto-dump container logs
+      const logsCmd = await dockerCmd(["logs", `vllm_bench_${port}`]);
+      const logsProc = Bun.spawn(logsCmd, { stdout: "pipe", stderr: "pipe" });
+      const logsOut = await new Response(logsProc.stdout).text();
+      const logsErr = await new Response(logsProc.stderr).text();
+      console.log();
+      console.log("  ── Container logs ──");
+      if (logsOut.trim()) console.log(logsOut.trim());
+      if (logsErr.trim()) console.log(logsErr.trim());
+      console.log("  ── End logs ──");
+      console.log();
       await stopServer(`vllm_bench_${port}`);
       return false;
     }
