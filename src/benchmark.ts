@@ -106,6 +106,30 @@ const DEPS: Record<string, { aptPackage: string | null; note?: string }> = {
   "nvidia-smi":  { aptPackage: null, note: "Requires NVIDIA drivers (not available via apt)" },
 };
 
+// ── Docker sudo detection ────────────────────────────────────────────────────
+
+let _dockerNeedsSudo: boolean | null = null;
+
+async function dockerNeedsSudo(): Promise<boolean> {
+  if (_dockerNeedsSudo !== null) return _dockerNeedsSudo;
+  // Try running docker without sudo first
+  const { exitCode } = await spawn(["docker", "info"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  _dockerNeedsSudo = exitCode !== 0;
+  if (_dockerNeedsSudo) {
+    log("Docker requires sudo — prefixing all docker commands with sudo");
+  }
+  return _dockerNeedsSudo;
+}
+
+/** Build a docker command array, prepending sudo if needed. */
+async function dockerCmd(args: string[]): Promise<string[]> {
+  const needsSudo = await dockerNeedsSudo();
+  return needsSudo ? ["sudo", "docker", ...args] : ["docker", ...args];
+}
+
 // ── Dependency checks ────────────────────────────────────────────────────────
 
 function checkCommand(name: string): boolean {
@@ -241,7 +265,8 @@ async function pullDockerImage(imageOverride: string | undefined, dryRun: boolea
     console.log(`  [DRY RUN] docker pull ${image}`);
     return;
   }
-  const proc = Bun.spawn(["docker", "pull", image], {
+  const cmd = await dockerCmd(["pull", image]);
+  const proc = Bun.spawn(cmd, {
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -370,14 +395,14 @@ async function startServer(
 
   const gpuFlag = opts.gpuIds ?? "all";
 
-  const args = [
-    "docker", "run", "-d",
+  let args = await dockerCmd([
+    "run", "-d",
     "--gpus", gpuFlag,
     "--ipc", "host",
     "--name", containerName,
     "-p", `${port}:8000`,
     "-v", `${hfCache}:/root/.cache/huggingface`,
-  ];
+  ]);
 
   // Pass HF token to container if provided
   if (opts.hfToken) {
@@ -459,10 +484,11 @@ async function waitForServer(
     }
 
     // Check if container crashed
-    const { stdout: status } = await spawn([
-      "docker", "inspect", `vllm_bench_${port}`,
-      "--format={{.State.Status}}",
-    ]);
+    const { stdout: status } = await spawn(
+      await dockerCmd(["inspect", `vllm_bench_${port}`,
+        "--format={{.State.Status}}",
+      ]),
+    );
 
     if (status === "exited") {
       error("Container exited unexpectedly. Check logs:");
@@ -486,7 +512,8 @@ async function waitForServer(
 
 async function stopServer(containerName: string): Promise<void> {
   try {
-    const proc = Bun.spawn(["docker", "rm", "-f", containerName], {
+    const cmd = await dockerCmd(["rm", "-f", containerName]);
+    const proc = Bun.spawn(cmd, {
       stdout: "ignore",
       stderr: "ignore",
     });
