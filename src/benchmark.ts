@@ -393,7 +393,13 @@ async function downloadModel(modelId: string, hfToken: string | undefined, dryRu
   );
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
-    warn(`Download exited with code ${exitCode} — model may still download partially`);
+    error(`Model download failed (exit ${exitCode})`);
+    console.log();
+    console.log("  Possible causes:");
+    console.log("    • Model ID doesn't exist — check https://huggingface.co/models");
+    console.log("    • Gated/private model — pass --hf-token <token> or set HF_TOKEN");
+    console.log();
+    process.exit(1);
   } else {
     success(`Download complete: ${modelId}`);
   }
