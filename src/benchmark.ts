@@ -94,6 +94,14 @@ process.on("SIGTERM", async () => {
   process.exit(143);
 });
 
+// ── Dependency definitions ──────────────────────────────────────────────────
+
+const DEPS: Record<string, { aptPackage: string | null; note?: string }> = {
+  "docker":     { aptPackage: "docker.io", note: "Also needs nvidia-container-toolkit for GPU support" },
+  "nvidia-smi":  { aptPackage: null, note: "Requires NVIDIA drivers (not available via apt)" },
+  "jq":          { aptPackage: "jq" },
+};
+
 // ── Dependency checks ────────────────────────────────────────────────────────
 
 function checkCommand(name: string): boolean {
@@ -124,10 +132,56 @@ async function checkDependencies(): Promise<GpuInfo> {
 
   if (missing.length > 0) {
     error(`Missing dependencies: ${missing.join(", ")}`);
-    console.log("Install with:");
-    console.log("  apt-get install -y docker.io jq curl");
-    console.log("  # nvidia drivers + nvidia-container-toolkit for docker GPU support");
-    process.exit(1);
+
+    const aptPackages = missing
+      .map((m) => DEPS[m]?.aptPackage)
+      .filter(Boolean) as string[];
+
+    if (missing.includes("nvidia-smi")) {
+      console.log();
+      console.log("  nvidia-smi requires NVIDIA drivers + nvidia-container-toolkit.");
+      console.log("  Install drivers:  https://docs.nvidia.com/cuda/cuda-installation-guide-linux");
+      console.log("  Install container: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide");
+      console.log();
+    }
+
+    if (aptPackages.length > 0) {
+      const installCmd = `sudo apt-get install -y ${aptPackages.join(" ")}`;
+      console.log(`  Install command:  ${installCmd}`);
+      console.log();
+
+      // Prompt to auto-install
+      process.stdout.write(`  Install now? [y/N] `);
+      const answer = await new Promise<string>((resolve) => {
+        process.stdin.once("data", (data) => resolve(data.toString().trim().toLowerCase()));
+      });
+
+      if (answer === "y" || answer === "yes") {
+        log(`Running: ${installCmd}`);
+        const proc = Bun.spawn(["sudo", "apt-get", "install", "-y", ...aptPackages], {
+          stdout: "inherit",
+          stderr: "inherit",
+        });
+        const exitCode = await proc.exited;
+        if (exitCode !== 0) {
+          error("Installation failed. Please install manually.");
+          process.exit(1);
+        }
+        success("Dependencies installed.");
+
+        // Re-check — if nvidia-smi was missing and still is, it needs a driver install
+        const stillMissing = missing.filter((m) => !checkCommand(m));
+        if (stillMissing.length > 0) {
+          error(`Still missing: ${stillMissing.join(", ")} — may require a reboot or manual driver installation`);
+          process.exit(1);
+        }
+      } else {
+        process.exit(1);
+      }
+    } else {
+      // Only nvidia-smi missing (no apt package for it)
+      process.exit(1);
+    }
   }
 
   // GPU detection
