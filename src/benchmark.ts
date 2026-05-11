@@ -499,12 +499,12 @@ async function startServer(
 
   args.push(
     image,
+    "serve",
     modelId,
     "--trust-remote-code",
     "--tensor-parallel-size", String(tp),
     "--max-model-len", String(maxModelLen),
     "--gpu-memory-utilization", "0.90",
-    "--disable-log-requests",
     "--port", "8000",
     ...quantFlags,
     ...extra,
