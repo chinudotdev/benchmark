@@ -304,16 +304,22 @@ async function downloadModel(modelId: string, hfToken: string | undefined, dryRu
 
   // Ensure huggingface_hub is available
   const pipProc = Bun.spawn(
-    ["python3", "-m", "pip", "install", "-q", "huggingface_hub"],
-    { stdout: "ignore", stderr: "ignore" },
+    ["python3", "-m", "pip", "install", "-q", "huggingface_hub[hf_xet]"],
+    { stdout: "pipe", stderr: "pipe" },
   );
-  await pipProc.exited;
+  const pipExit = await pipProc.exited;
+  if (pipExit !== 0) {
+    const pipErr = await new Response(pipProc.stderr).text();
+    warn(`pip install huggingface_hub failed (exit ${pipExit}): ${pipErr.trim()}`);
+    warn("Falling back to docker-based model pull");
+  }
 
   const env: Record<string, string> = { ...process.env as Record<string, string> };
   if (hfToken) env.HUGGING_FACE_HUB_TOKEN = hfToken;
 
+  // Use python3 -m instead of bare huggingface-cli to avoid PATH issues
   const proc = Bun.spawn(
-    ["huggingface-cli", "download", modelId, "--resume-download", "--quiet"],
+    ["python3", "-m", "huggingface_hub.cli", "download", modelId, "--resume-download"],
     { stdout: "inherit", stderr: "inherit", env },
   );
   const exitCode = await proc.exited;
