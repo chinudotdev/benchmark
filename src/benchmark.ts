@@ -249,6 +249,74 @@ async function checkDependencies(): Promise<GpuInfo> {
   log(`Available VRAM: ${vramGb}GB (first GPU)`);
   log(`GPU: ${gpuName}`);
 
+  // Check nvidia-container-toolkit (required for Docker GPU passthrough)
+  const { exitCode: nctCheck } = await spawn([
+    "dpkg", "-s", "nvidia-container-toolkit",
+  ]);
+  if (nctCheck !== 0) {
+    error("nvidia-container-toolkit is not installed — Docker cannot access GPUs");
+    console.log();
+    console.log("  Install with:");
+    console.log("    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg");
+    console.log("    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \\");
+    console.log("      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \\");
+    console.log("      sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list");
+    console.log("    sudo apt-get update");
+    console.log("    sudo apt-get install -y nvidia-container-toolkit");
+    console.log("    sudo nvidia-ctk runtime configure --runtime=docker");
+    console.log("    sudo systemctl restart docker");
+    console.log();
+
+    // Prompt to auto-install
+    process.stdout.write("  Install now? [y/N] ");
+    const answer = await new Promise<string>((resolve) => {
+      process.stdin.once("data", (data) => resolve(data.toString().trim().toLowerCase()));
+    });
+
+    if (answer === "y" || answer === "yes") {
+      log("Setting up nvidia-container-toolkit repository...");
+      await spawn(["sh", "-c",
+        "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null",
+      ]);
+      await spawn(["sh", "-c",
+        "curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null",
+      ]);
+
+      log("Installing nvidia-container-toolkit...");
+      const aptProc = Bun.spawn(
+        ["sudo", "apt-get", "update", "-y", "&&", "sudo", "apt-get", "install", "-y", "nvidia-container-toolkit"],
+        { stdout: "inherit", stderr: "inherit" },
+      );
+      // apt-get with && doesn't work via Bun.spawn directly, use sh -c
+      const shellProc = Bun.spawn(
+        ["sh", "-c", "sudo apt-get update -y && sudo apt-get install -y nvidia-container-toolkit"],
+        { stdout: "inherit", stderr: "inherit" },
+      );
+      const installExit = await shellProc.exited;
+      if (installExit !== 0) {
+        error("Installation failed. Please install manually.");
+        process.exit(1);
+      }
+
+      log("Configuring Docker runtime...");
+      await spawn(["sudo", "nvidia-ctk", "runtime", "configure", "--runtime=docker"]);
+
+      log("Restarting Docker...");
+      const restartProc = Bun.spawn(["sudo", "systemctl", "restart", "docker"], {
+        stdout: "inherit", stderr: "inherit",
+      });
+      const restartExit = await restartProc.exited;
+      if (restartExit !== 0) {
+        error("Failed to restart Docker. Try: sudo systemctl restart docker");
+        process.exit(1);
+      }
+
+      success("nvidia-container-toolkit installed and Docker restarted.");
+    } else {
+      process.exit(1);
+    }
+  }
+
   return { name: gpuName, vramGb, fullInfo: gpuInfo };
 }
 
@@ -317,9 +385,10 @@ async function downloadModel(modelId: string, hfToken: string | undefined, dryRu
   const env: Record<string, string> = { ...process.env as Record<string, string> };
   if (hfToken) env.HUGGING_FACE_HUB_TOKEN = hfToken;
 
-  // Use python3 -m instead of bare huggingface-cli to avoid PATH issues
+  // Use python3 -c to avoid PATH issues with huggingface-cli binary
   const proc = Bun.spawn(
-    ["python3", "-m", "huggingface_hub.cli", "download", modelId, "--resume-download"],
+    ["python3", "-c",
+      `from huggingface_hub import snapshot_download; snapshot_download("${modelId}", resume_download=True)`],
     { stdout: "inherit", stderr: "inherit", env },
   );
   const exitCode = await proc.exited;
