@@ -129,7 +129,12 @@ export async function collectSystemInfo(dockerImage?: string): Promise<SystemInf
 
   // ── Docker version ──
   let dockerVersion = "unknown";
-  const { stdout: dockVer } = await spawn(["docker", "version", "--format", "{{.Server.Version}}"]);
+  let { stdout: dockVer } = await spawn(["docker", "version", "--format", "{{.Server.Version}}"]);
+  if (!dockVer) {
+    // May need permissions
+    const result = await spawn(["sudo", "docker", "version", "--format", "{{.Server.Version}}"]);
+    dockVer = result.stdout;
+  }
   if (dockVer) dockerVersion = dockVer;
 
   // ── Disk ──
@@ -137,14 +142,26 @@ export async function collectSystemInfo(dockerImage?: string): Promise<SystemInf
   const hfCacheDir = join(process.env.HOME ?? "/root", ".cache/huggingface");
   // df on the target dir, fall back to HOME if it doesn't exist yet
   const dfTarget = existsSync(hfCacheDir) ? hfCacheDir : (process.env.HOME ?? "/");
-  const { stdout: dfOut } = await spawn(["df", "-g", dfTarget]);
+  // Try -BG (Linux: GB units) then -g (macOS/BSD: 1G-blocks) then -h as fallback
+  let dfOut = "";
+  for (const flag of ["-BG", "-g", "-h"]) {
+    const result = await spawn(["df", flag, dfTarget]);
+    if (result.exitCode === 0 && result.stdout) {
+      dfOut = result.stdout;
+      break;
+    }
+  }
   if (dfOut) {
     const dfLines = dfOut.split("\n");
     if (dfLines.length >= 2) {
-      // Columns: Filesystem, 1G-blocks, Used, Available, Capacity, ...
+      // Columns: Filesystem, Size/Blocks, Used, Available, ...
       const parts = dfLines[1]!.trim().split(/\s+/);
-      const avail = parts[3]; // Available column (in GB)
-      if (avail) diskAvailGb = parseInt(avail) || 0;
+      const avail = parts[3]; // Available column
+      if (avail) {
+        // Strip unit suffix (G, Gi, etc.) if present
+        const cleaned = avail.replace(/[A-Za-z]+$/, "");
+        diskAvailGb = Math.round(parseFloat(cleaned)) || 0;
+      }
     }
   }
 

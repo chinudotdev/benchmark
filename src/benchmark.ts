@@ -55,15 +55,19 @@ async function spawn(
   cmd: string[],
   opts?: { stdout?: "pipe" | "inherit" | "ignore"; stderr?: "pipe" | "inherit" | "ignore" },
 ): Promise<{ stdout: string; exitCode: number }> {
-  const proc = Bun.spawn(cmd, {
-    stdout: opts?.stdout ?? "pipe",
-    stderr: opts?.stderr ?? "pipe",
-  });
-  const stdout = opts?.stdout === "pipe"
-    ? await new Response(proc.stdout).text()
-    : "";
-  const exitCode = await proc.exited;
-  return { stdout: stdout.trim(), exitCode };
+  try {
+    const proc = Bun.spawn(cmd, {
+      stdout: opts?.stdout ?? "pipe",
+      stderr: opts?.stderr ?? "pipe",
+    });
+    const stdout = opts?.stdout === "pipe"
+      ? await new Response(proc.stdout).text()
+      : "";
+    const exitCode = await proc.exited;
+    return { stdout: stdout.trim(), exitCode };
+  } catch {
+    return { stdout: "", exitCode: -1 };
+  }
 }
 
 // ── Cleanup state ────────────────────────────────────────────────────────────
