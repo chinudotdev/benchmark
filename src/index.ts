@@ -13,6 +13,7 @@ import { Command } from "commander";
 import { resolve } from "node:path";
 import { runBenchmarkCommand } from "./benchmark";
 import { runSummarize } from "./summarize";
+import { runSysInfo } from "./sysinfo";
 
 const program = new Command();
 
@@ -76,6 +77,20 @@ program
   .option("--format <fmt>", "Output format: table, csv, json", "table")
   .action((opts) => {
     runSummarize(resolve(opts.resultsDir), opts.format);
+  });
+
+// ── sysinfo command ──────────────────────────────────────────────────────────
+
+program
+  .command("sysinfo")
+  .description("Display current system configuration (GPU, CPU, RAM, OS, Docker)")
+  .option("--docker-image <image>", "Docker image to display (default: vllm/vllm-openai:latest)")
+  .option("--json", "Output as JSON instead of pretty table")
+  .action(async (opts) => {
+    await runSysInfo({
+      dockerImage: opts.dockerImage,
+      json: opts.json === true,
+    });
   });
 
 // ── Parse ────────────────────────────────────────────────────────────────────

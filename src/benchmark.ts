@@ -12,11 +12,11 @@ import type {
   GpuInfo,
   ModelEntry,
   SystemInfo,
-  GpuDetails,
 } from "./types";
 import { log, success, warn, error, header, bold, green } from "./log";
 import { runBenchmark, printMetrics } from "./bench-runner";
 import { loadModels } from "./models";
+import { collectSystemInfo, writeSystemInfo, printSystemInfo } from "./sysinfo";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -26,133 +26,7 @@ const DOCKER_IMAGE_DEFAULT = "vllm/vllm-openai:latest";
 
 // ── System info collection ───────────────────────────────────────────────────
 
-async function readFileSafe(path: string): Promise<string> {
-  try {
-    return await Bun.file(path).text();
-  } catch {
-    return "";
-  }
-}
 
-async function collectSystemInfo(dockerImage?: string): Promise<SystemInfo> {
-  header("Collecting system info");
-
-  // ── GPUs ──
-  const gpus: GpuDetails[] = [];
-  const { stdout: gpuQuery } = await spawn([
-    "nvidia-smi",
-    "--query-gpu=name,memory.total,driver_version",
-    "--format=csv,noheader",
-  ]);
-
-  // CUDA version from nvidia-smi header
-  let cudaVersion = "unknown";
-  const { stdout: smiHeader } = await spawn(["nvidia-smi"]);
-  const cudaMatch = smiHeader.match(/CUDA Version:\s*([\d.]+)/);
-  if (cudaMatch) cudaVersion = cudaMatch[1]!;
-
-  if (gpuQuery) {
-    for (const line of gpuQuery.split("\n")) {
-      if (!line.trim()) continue;
-      const parts = line.split(",").map((s) => s.trim());
-      const name = parts[0] ?? "unknown";
-      const vramStr = parts[1] ?? "";
-      const vramMatch = vramStr.match(/(\d+)\s*MiB/i);
-      const vramGb = vramMatch ? Math.round(parseInt(vramMatch[1]!) / 1024) : 0;
-      const driverVersion = parts[2] ?? "unknown";
-      gpus.push({ name, vram_gb: vramGb, driver_version: driverVersion, cuda_version: cudaVersion });
-    }
-  }
-
-  // ── CPU ──
-  let cpuModel = "unknown";
-  let cpuCores = 0;
-  const cpuInfo = await readFileSafe("/proc/cpuinfo");
-  if (cpuInfo) {
-    const modelMatch = cpuInfo.match(/model name\s*:\s*(.+)/);
-    if (modelMatch) cpuModel = modelMatch[1]!.trim();
-    cpuCores = cpuInfo.split("\n").filter((l) => l.startsWith("processor")).length;
-  }
-  if (cpuCores === 0) {
-    const { stdout: nproc } = await spawn(["nproc"]);
-    cpuCores = parseInt(nproc) || 0;
-  }
-
-  // ── RAM ──
-  let ramGb = 0;
-  const meminfo = await readFileSafe("/proc/meminfo");
-  if (meminfo) {
-    const memTotal = meminfo.match(/MemTotal:\s*(\d+)\s*kB/);
-    if (memTotal) ramGb = Math.round(parseInt(memTotal[1]!) / 1024 / 1024);
-  }
-
-  // ── OS ──
-  let osName = "unknown";
-  const osRelease = await readFileSafe("/etc/os-release");
-  if (osRelease) {
-    const nameMatch = osRelease.match(/^PRETTY_NAME="(.+)"/m);
-    if (nameMatch) osName = nameMatch[1]!;
-    else {
-      const nameM = osRelease.match(/^NAME="(.+)"/m);
-      const verM = osRelease.match(/^VERSION="(.+)"/m);
-      osName = [nameM?.[1], verM?.[1]].filter(Boolean).join(" ") || "unknown";
-    }
-  }
-
-  // ── Kernel ──
-  const { stdout: kernel } = await spawn(["uname", "-r"]);
-
-  // ── Docker version ──
-  let dockerVersion = "unknown";
-  const { stdout: dockVer } = await spawn(["docker", "version", "--format", "{{.Server.Version}}"]);
-  if (dockVer) dockerVersion = dockVer;
-
-  // ── Disk ──
-  let diskAvailGb = 0;
-  const hfCacheDir = join(process.env.HOME ?? "/root", ".cache/huggingface");
-  const { stdout: dfOut } = await spawn(["df", "-BG", hfCacheDir]);
-  const dfLines = dfOut.split("\n");
-  if (dfLines.length >= 2) {
-    const availMatch = dfLines[1]!.match(/\d+\s+\d+\s+(\d+)/);
-    if (availMatch) diskAvailGb = parseInt(availMatch[1]!);
-  }
-
-  const image = getDockerImage(dockerImage);
-
-  const info: SystemInfo = {
-    gpus,
-    cpu: { model: cpuModel, cores: cpuCores },
-    ram_gb: ramGb,
-    os: osName,
-    kernel: kernel || "unknown",
-    docker_version: dockerVersion,
-    vllm_image: image,
-    disk_available_gb: diskAvailGb,
-    collected_at: new Date().toISOString(),
-  };
-
-  // Print summary
-  success("System configuration:");
-  for (const g of info.gpus) {
-    console.log(`    GPU:      ${g.name} (${g.vram_gb}GB VRAM, driver ${g.driver_version}, CUDA ${g.cuda_version})`);
-  }
-  console.log(`    CPU:      ${info.cpu.model} (${info.cpu.cores} cores)`);
-  console.log(`    RAM:      ${info.ram_gb}GB`);
-  console.log(`    OS:       ${info.os}`);
-  console.log(`    Kernel:   ${info.kernel}`);
-  console.log(`    Docker:   ${info.docker_version}`);
-  console.log(`    vLLM:     ${info.vllm_image}`);
-  console.log(`    Disk:     ${info.disk_available_gb}GB available`);
-
-  return info;
-}
-
-function writeSystemInfo(resultsDir: string, info: SystemInfo): void {
-  mkdirSync(resultsDir, { recursive: true });
-  const file = join(resultsDir, "system_info.json");
-  writeFileSync(file, JSON.stringify(info, null, 2) + "\n");
-  success(`System info written: ${file}`);
-}
 
 // ── Quantization validation ─────────────────────────────────────────────────
 

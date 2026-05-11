@@ -76,6 +76,16 @@ bun run src/index.ts run --help
 ./gpu-benchmark summarize --format json
 ```
 
+### 7. Show current system configuration
+
+```bash
+# Pretty print
+./gpu-benchmark sysinfo
+
+# JSON output
+./gpu-benchmark sysinfo --json
+```
+
 ## Output
 
 Each model run produces a JSON in `./results/`:
@@ -143,6 +153,11 @@ gpu-benchmark summarize [options]
 
   --results-dir <path>   Results directory (default: ./results)
   --format <fmt>         Output: table, csv, json (default: table)
+
+gpu-benchmark sysinfo [options]
+
+  --docker-image <img>  Docker image to display (default: vllm/vllm-openai:latest)
+  --json                Output as JSON instead of pretty table
 ```
 
 ## Adding a New Model
@@ -179,6 +194,7 @@ src/
 ├── index.ts          CLI entry point (commander)
 ├── benchmark.ts      Main orchestration (Docker, GPU, download, bench, cost)
 ├── bench-runner.ts   HTTP benchmark client (concurrent fetch)
+├── sysinfo.ts        System info collection (GPU, CPU, RAM, OS, Docker)
 ├── summarize.ts      Results table/CSV/JSON
 ├── models.ts         YAML model registry parser
 ├── semaphore.ts      Async concurrency limiter
