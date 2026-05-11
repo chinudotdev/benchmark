@@ -99,7 +99,6 @@ process.on("SIGTERM", async () => {
 const DEPS: Record<string, { aptPackage: string | null; note?: string }> = {
   "docker":     { aptPackage: "docker.io", note: "Also needs nvidia-container-toolkit for GPU support" },
   "nvidia-smi":  { aptPackage: null, note: "Requires NVIDIA drivers (not available via apt)" },
-  "jq":          { aptPackage: "jq" },
 };
 
 // ── Dependency checks ────────────────────────────────────────────────────────
@@ -127,8 +126,7 @@ async function checkDependencies(): Promise<GpuInfo> {
     // not for the benchmark itself. Warn but don't block.
     warn("python3 not found — model downloading won't work (benchmarking already-cached models is fine)");
   }
-  if (!checkCommand("jq")) missing.push("jq");
-  // curl is not required — we use native fetch
+  // jq and curl are not required — we use native fetch and JSON.parse
 
   if (missing.length > 0) {
     error(`Missing dependencies: ${missing.join(", ")}`);
@@ -157,7 +155,17 @@ async function checkDependencies(): Promise<GpuInfo> {
       });
 
       if (answer === "y" || answer === "yes") {
-        log(`Running: ${installCmd}`);
+        log("Updating package lists...");
+        const updateProc = Bun.spawn(["sudo", "apt-get", "update", "-y"], {
+          stdout: "pipe",
+          stderr: "inherit",
+        });
+        const updateExit = await updateProc.exited;
+        if (updateExit !== 0) {
+          warn("apt-get update failed (will try install anyway)");
+        }
+
+        log(`Installing: ${aptPackages.join(", ")}`);
         const proc = Bun.spawn(["sudo", "apt-get", "install", "-y", ...aptPackages], {
           stdout: "inherit",
           stderr: "inherit",
