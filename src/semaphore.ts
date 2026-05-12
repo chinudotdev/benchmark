@@ -2,12 +2,15 @@
 
 export class Semaphore {
   private queue: (() => void)[] = [];
+  private _available: number;
 
-  constructor(private max: number) {}
+  constructor(max: number) {
+    this._available = max;
+  }
 
   async acquire(): Promise<void> {
-    if (this.max > 0) {
-      this.max--;
+    if (this._available > 0) {
+      this._available--;
       return;
     }
     return new Promise<void>((resolve) => {
@@ -20,7 +23,12 @@ export class Semaphore {
     if (next) {
       next();
     } else {
-      this.max++;
+      this._available++;
     }
+  }
+
+  /** Current number of available permits (for diagnostics). */
+  get available(): number {
+    return this._available;
   }
 }

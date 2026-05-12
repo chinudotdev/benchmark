@@ -4,7 +4,8 @@
 // benchmarking, cost calculation, result persistence.
 
 import { join, resolve, dirname } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type {
   BenchmarkOptions,
   BenchmarkResult,
@@ -17,23 +18,24 @@ import { log, success, warn, error, header, bold, green } from "./log";
 import { runBenchmark, printMetrics } from "./bench-runner";
 import { loadModels } from "./models";
 import { collectSystemInfo, writeSystemInfo, printSystemInfo } from "./sysinfo";
+import { spawn } from "./spawn";
+import { FatalError } from "./errors";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const VALID_QUANTS = ["none", "int8", "int4", "awq", "fp8"] as const;
-const COST_UNAVAILABLE = -1;
 const DOCKER_IMAGE_DEFAULT = "vllm/vllm-openai:latest";
 
-// ── System info collection ───────────────────────────────────────────────────
-
-
+function containerNameForPort(port: number): string {
+  return `vllm_bench_${port}`;
+}
 
 // ── Quantization validation ─────────────────────────────────────────────────
 
 function validateQuant(quant: string): void {
   if (quant && !VALID_QUANTS.includes(quant as typeof VALID_QUANTS[number])) {
     error(`Invalid quant '${quant}'. Must be one of: ${VALID_QUANTS.join(", ")}`);
-    process.exit(1);
+    throw new FatalError();
   }
 }
 
@@ -43,32 +45,10 @@ function calculateCost(
   tps: number,
   gpuRate: number,
   gpuCount: number,
-): number {
-  if (tps <= 0) return COST_UNAVAILABLE;
+): number | null {
+  if (tps <= 0) return null;
   const totalHourly = gpuRate * gpuCount;
   return (totalHourly / tps / 3600) * 1_000_000;
-}
-
-// ── Spawn helper ─────────────────────────────────────────────────────────────
-
-async function spawn(
-  cmd: string[],
-  opts?: { stdout?: "pipe" | "inherit" | "ignore"; stderr?: "pipe" | "inherit" | "ignore" },
-): Promise<{ stdout: string; exitCode: number }> {
-  try {
-    const proc = Bun.spawn(cmd, {
-      stdout: opts?.stdout ?? "pipe",
-      stderr: opts?.stderr ?? "pipe",
-    });
-    const stdoutMode = opts?.stdout ?? "pipe";
-    const stdout = stdoutMode === "pipe"
-      ? await new Response(proc.stdout).text()
-      : "";
-    const exitCode = await proc.exited;
-    return { stdout: stdout.trim(), exitCode };
-  } catch {
-    return { stdout: "", exitCode: -1 };
-  }
 }
 
 // ── Cleanup state ────────────────────────────────────────────────────────────
@@ -203,7 +183,7 @@ async function checkDependencies(): Promise<GpuInfo> {
         const exitCode = await proc.exited;
         if (exitCode !== 0) {
           error("Installation failed. Please install manually.");
-          process.exit(1);
+          throw new FatalError();
         }
         success("Dependencies installed.");
 
@@ -211,27 +191,31 @@ async function checkDependencies(): Promise<GpuInfo> {
         const stillMissing = missing.filter((m) => !checkCommand(m));
         if (stillMissing.length > 0) {
           error(`Still missing: ${stillMissing.join(", ")} — may require a reboot or manual driver installation`);
-          process.exit(1);
+          throw new FatalError();
         }
       } else {
-        process.exit(1);
+        throw new FatalError();
       }
     } else {
       // Only nvidia-smi missing (no apt package for it)
-      process.exit(1);
+      throw new FatalError();
     }
   }
 
   // GPU detection
-  const { stdout: gpuInfo, exitCode } = await spawn([
+  const { stdout: gpuInfo, exitCode: gpuExit, stderr: gpuErr } = await spawn([
     "nvidia-smi",
     "--query-gpu=name,memory.total",
     "--format=csv,noheader",
   ]);
 
-  if (exitCode !== 0 || !gpuInfo) {
+  if (!gpuInfo) {
     error("No GPUs detected by nvidia-smi");
-    process.exit(1);
+    if (gpuErr) log(`nvidia-smi stderr: ${gpuErr}`);
+    throw new FatalError();
+  }
+  if (gpuExit !== 0) {
+    warn(`nvidia-smi exited with code ${gpuExit} but returned data — proceeding`);
   }
 
   success("GPUs detected:");
@@ -283,11 +267,6 @@ async function checkDependencies(): Promise<GpuInfo> {
       ]);
 
       log("Installing nvidia-container-toolkit...");
-      const aptProc = Bun.spawn(
-        ["sudo", "apt-get", "update", "-y", "&&", "sudo", "apt-get", "install", "-y", "nvidia-container-toolkit"],
-        { stdout: "inherit", stderr: "inherit" },
-      );
-      // apt-get with && doesn't work via Bun.spawn directly, use sh -c
       const shellProc = Bun.spawn(
         ["sh", "-c", "sudo apt-get update -y && sudo apt-get install -y nvidia-container-toolkit"],
         { stdout: "inherit", stderr: "inherit" },
@@ -295,7 +274,7 @@ async function checkDependencies(): Promise<GpuInfo> {
       const installExit = await shellProc.exited;
       if (installExit !== 0) {
         error("Installation failed. Please install manually.");
-        process.exit(1);
+        throw new FatalError();
       }
 
       log("Configuring Docker runtime...");
@@ -308,12 +287,12 @@ async function checkDependencies(): Promise<GpuInfo> {
       const restartExit = await restartProc.exited;
       if (restartExit !== 0) {
         error("Failed to restart Docker. Try: sudo systemctl restart docker");
-        process.exit(1);
+        throw new FatalError();
       }
 
       success("nvidia-container-toolkit installed and Docker restarted.");
     } else {
-      process.exit(1);
+      throw new FatalError();
     }
   }
 
@@ -341,7 +320,7 @@ async function pullDockerImage(imageOverride: string | undefined, dryRun: boolea
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     error(`docker pull failed (exit ${exitCode})`);
-    process.exit(1);
+    throw new FatalError();
   }
   success(`Image ready: ${image}`);
 }
@@ -406,7 +385,7 @@ async function downloadModel(modelId: string, hfToken: string | undefined, dryRu
     console.log("    • Model ID doesn't exist — check https://huggingface.co/models");
     console.log("    • Gated/private model — pass --hf-token <token> or set HF_TOKEN");
     console.log();
-    process.exit(1);
+    throw new FatalError();
   } else {
     success(`Download complete: ${modelId}`);
   }
@@ -469,13 +448,23 @@ async function startServer(
   if (!opts.dryRun) {
     const inUse = await isPortInUse(port);
     if (inUse) {
-      error(`Port ${port} is already in use. Stop the process using it or specify a different --port.`);
-      process.exit(1);
+      // Check if a stale benchmark container is occupying the port
+      const containerName = containerNameForPort(port);
+      const { exitCode: inspectExit } = await spawn(
+        await dockerCmd(["inspect", containerName, "--format={{.State.Running}}"]),
+      );
+      if (inspectExit === 0) {
+        error(`Port ${port} is already in use by a stale benchmark container.`);
+        console.log(`  Remove it with: ${(await dockerCmd([])).join(" ")} rm -f ${containerName}`);
+      } else {
+        error(`Port ${port} is already in use. Stop the process using it or specify a different --port.`);
+      }
+      throw new FatalError();
     }
   }
 
   const image = getDockerImage(opts.dockerImage);
-  const containerName = `vllm_bench_${port}`;
+  const containerName = containerNameForPort(port);
   const hfCache = join(process.env.HOME ?? "/root", ".cache/huggingface");
 
   const quantFlags = getQuantFlags(quant);
@@ -492,9 +481,12 @@ async function startServer(
     "-v", `${hfCache}:/root/.cache/huggingface`,
   ]);
 
-  // Pass HF token to container if provided
+  // Pass HF token to container via env-file (avoids leaking in ps aux)
+  let envFile: string | null = null;
   if (opts.hfToken) {
-    args.push("-e", `HUGGING_FACE_HUB_TOKEN=${opts.hfToken}`);
+    envFile = join(tmpdir(), `.vllm_bench_env_${port}`);
+    writeFileSync(envFile, `HUGGING_FACE_HUB_TOKEN=${opts.hfToken}\n`);
+    args.push("--env-file", envFile);
   }
 
   args.push(
@@ -526,13 +518,21 @@ async function startServer(
   // Kill any existing container
   await stopServer(containerName);
 
-  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-  const exitCode = await proc.exited;
+  let exitCode: number;
+  try {
+    const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+    exitCode = await proc.exited;
+  } finally {
+    // Always clean up env-file — Docker has already read it
+    if (envFile) {
+      try { unlinkSync(envFile); } catch { /* non-critical */ }
+    }
+  }
 
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
     error(`Failed to start container: ${stderr.trim()}`);
-    throw new Error("Docker start failed");
+    throw new FatalError("Docker start failed");
   }
 
   activeContainer = containerName;
@@ -572,7 +572,7 @@ async function waitForServer(
 
     // Check if container crashed
     const { stdout: status } = await spawn(
-      await dockerCmd(["inspect", `vllm_bench_${port}`,
+      await dockerCmd(["inspect", containerNameForPort(port),
         "--format={{.State.Status}}",
       ]),
     );
@@ -580,7 +580,7 @@ async function waitForServer(
     if (status === "exited") {
       error("Container exited unexpectedly.");
       // Auto-dump container logs
-      const logsCmd = await dockerCmd(["logs", `vllm_bench_${port}`]);
+      const logsCmd = await dockerCmd(["logs", containerNameForPort(port)]);
       const logsProc = Bun.spawn(logsCmd, { stdout: "pipe", stderr: "pipe" });
       const logsOut = await new Response(logsProc.stdout).text();
       const logsErr = await new Response(logsProc.stderr).text();
@@ -590,7 +590,7 @@ async function waitForServer(
       if (logsErr.trim()) console.log(logsErr.trim());
       console.log("  ── End logs ──");
       console.log();
-      await stopServer(`vllm_bench_${port}`);
+      await stopServer(containerNameForPort(port));
       return false;
     }
 
@@ -600,8 +600,8 @@ async function waitForServer(
   }
 
   error(`Server did not become ready within ${maxWait}s`);
-  console.log(`  docker logs vllm_bench_${port}`);
-  await stopServer(`vllm_bench_${port}`);
+  console.log(`  docker logs ${containerNameForPort(port)}`);
+  await stopServer(containerNameForPort(port));
   return false;
 }
 
@@ -630,7 +630,7 @@ function writeResult(
   opts: BenchmarkOptions,
   gpuInfo: GpuInfo,
   metrics: BenchmarkMetrics,
-  cost: number,
+  cost: number | null,
   resultFile: string,
   systemInfo: SystemInfo,
 ): void {
@@ -651,7 +651,7 @@ function writeResult(
     },
     results: {
       output_tokens_per_sec: metrics.output_tps,
-      cost_per_1m_output_tokens_usd: isNaN(cost) ? COST_UNAVAILABLE : Math.round(cost * 10000) / 10000,
+      cost_per_1m_output_tokens_usd: cost === null ? null : Math.round(cost * 10000) / 10000,
     },
     system: systemInfo,
     timestamp: new Date().toISOString(),
@@ -709,8 +709,7 @@ function printSummary(resultsDir: string): void {
       const quant = data.quant.padEnd(quantW);
       const tps = String(data.results.output_tokens_per_sec).padEnd(tpsW);
       const costVal = data.results.cost_per_1m_output_tokens_usd;
-      const cost = (costVal === null || costVal === undefined || costVal === COST_UNAVAILABLE || isNaN(costVal))
-        ? "N/A" : `$${costVal}`;
+      const cost = costVal === null ? "N/A" : `$${costVal}`;
       console.log(`  ${name}  ${quant}  ${tps}  ${cost}`);
     } catch {
       warn(`Could not parse: ${file}`);
@@ -794,7 +793,7 @@ async function benchmarkModel(
 
   // Calculate cost
   const cost = calculateCost(metrics.output_tps, opts.gpuRate, opts.gpuCount);
-  const costStr = (isNaN(cost) || cost === COST_UNAVAILABLE) ? "N/A" : `$${cost.toFixed(4)}`;
+  const costStr = cost === null ? "N/A" : `$${cost.toFixed(4)}`;
 
   // Write result
   writeResult(model, opts, gpuInfo, metrics, cost, resultFile, systemInfo);
@@ -818,48 +817,55 @@ export async function runBenchmarkCommand(opts: BenchmarkOptions): Promise<void>
   log(`Results:    ${opts.resultsDir}`);
   if (opts.dryRun) warn("DRY RUN mode — no commands will execute");
 
-  const gpuInfo = await checkDependencies();
+  try {
+    const gpuInfo = await checkDependencies();
 
-  // Collect full system info (once for the whole run)
-  const systemInfo = await collectSystemInfo(opts.dockerImage);
+    // Collect full system info (once for the whole run)
+    const systemInfo = await collectSystemInfo(opts.dockerImage);
 
-  // Validate quant if provided
-  if (opts.quant) validateQuant(opts.quant);
+    // Validate quant if provided
+    if (opts.quant) validateQuant(opts.quant);
 
-  await pullDockerImage(opts.dockerImage, opts.dryRun);
+    await pullDockerImage(opts.dockerImage, opts.dryRun);
 
-  mkdirSync(opts.resultsDir, { recursive: true });
+    mkdirSync(opts.resultsDir, { recursive: true });
 
-  // Write standalone system_info.json
-  if (!opts.dryRun) writeSystemInfo(opts.resultsDir, systemInfo);
+    // Write standalone system_info.json
+    if (!opts.dryRun) writeSystemInfo(opts.resultsDir, systemInfo);
 
-  if (opts.all) {
-    // Run all models from registry
-    const models = loadModels(resolve(opts.modelsYaml));
-    log(`Found ${models.length} models in registry`);
+    if (opts.all) {
+      // Run all models from registry
+      const models = loadModels(resolve(opts.modelsYaml));
+      log(`Found ${models.length} models in registry`);
 
-    for (const model of models) {
-      await benchmarkModel(model, opts, gpuInfo, systemInfo);
+      for (const model of models) {
+        await benchmarkModel(model, opts, gpuInfo, systemInfo);
+      }
+    } else if (opts.modelId) {
+      // Run single model (quant defaults to "none" unless overridden via --quant)
+      await benchmarkModel(
+        {
+          id: opts.modelId,
+          name: opts.modelId.split("/").pop() ?? opts.modelId,
+          quant: opts.quant ?? "none",
+          min_vram_gb: 0,
+          tp: 1,
+          extra_flags: "",
+        },
+        opts,
+        gpuInfo,
+        systemInfo,
+      );
+    } else {
+      error("Provide --model-id <id> or --all");
+      throw new FatalError();
     }
-  } else if (opts.modelId) {
-    // Run single model (quant defaults to "none" unless overridden via --quant)
-    await benchmarkModel(
-      {
-        id: opts.modelId,
-        name: opts.modelId.split("/").pop() ?? opts.modelId,
-        quant: opts.quant ?? "none",
-        min_vram_gb: 0,
-        tp: 1,
-        extra_flags: "",
-      },
-      opts,
-      gpuInfo,
-      systemInfo,
-    );
-  } else {
-    error("Provide --model-id <id> or --all");
-    process.exit(1);
-  }
 
-  printSummary(opts.resultsDir);
+    printSummary(opts.resultsDir);
+  } catch (err) {
+    if (err instanceof FatalError) {
+      process.exit(1);
+    }
+    throw err;
+  }
 }
