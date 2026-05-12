@@ -18,12 +18,17 @@ export function loadModels(yamlPath: string): ModelEntry[] {
     throw new Error("Invalid models.yaml: expected a 'models' array");
   }
 
-  return data.models.map((m: Record<string, unknown>) => ({
-    id: String(m.id ?? ""),
-    name: String(m.name ?? m.id ?? "unknown"),
-    quant: String(m.quant ?? "none"),
-    min_vram_gb: Number(m.min_vram_gb ?? 0),
-    tp: Number(m.tp ?? 1),
-    extra_flags: String(m.extra_flags ?? ""),
-  }));
+  return data.models.map((m: Record<string, unknown>, i: number) => {
+    if (!m.id || typeof m.id !== "string") {
+      throw new Error(`Invalid models.yaml: entry ${i + 1} missing required 'id' field`);
+    }
+    return {
+      id: m.id,
+      name: String(m.name ?? m.id),
+      quant: String(m.quant ?? "none"),
+      min_vram_gb: Number(m.min_vram_gb ?? 0),
+      tp: Number(m.tp ?? 1),
+      extra_flags: String(m.extra_flags ?? ""),
+    };
+  });
 }

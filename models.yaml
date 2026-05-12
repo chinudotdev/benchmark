@@ -42,7 +42,7 @@ models:
 
   # --- 32B class (VRAM ceiling test) ---
   - id: Qwen/Qwen3-32B
-    name: Qwen3-32B-INT8
+    name: Qwen3-32B
     quant: int8
     min_vram_gb: 36
     tp: 1

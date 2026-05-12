@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { SystemInfo, GpuDetails } from "./types";
 import { log, success, warn, error, header, bold } from "./log";
+import { spawn } from "./spawn";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -15,22 +16,6 @@ async function readFileSafe(path: string): Promise<string> {
     return await Bun.file(path).text();
   } catch {
     return "";
-  }
-}
-
-async function spawn(
-  cmd: string[],
-): Promise<{ stdout: string; exitCode: number }> {
-  try {
-    const proc = Bun.spawn(cmd, {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const stdout = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
-    return { stdout: stdout.trim(), exitCode };
-  } catch {
-    return { stdout: "", exitCode: -1 };
   }
 }
 

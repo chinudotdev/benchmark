@@ -35,8 +35,10 @@ function loadResults(resultsDir: string): BenchmarkResult[] {
 
 // ── Table format ─────────────────────────────────────────────────────────────
 
-function formatTable(results: BenchmarkResult[]): string {
+function formatTable(results: BenchmarkResult[], resultsDir: string): string {
   if (results.length === 0) return "No results found.";
+
+  const absDir = resolve(resultsDir);
 
   interface Row {
     model: string;
@@ -47,20 +49,6 @@ function formatTable(results: BenchmarkResult[]): string {
     tps: string;
     cost_1m: string;
     ts: string;
-  }
-
-  // Show system info header if available
-  const sysInfoPath = join(absDir, "system_info.json");
-  if (existsSync(sysInfoPath)) {
-    try {
-      const si: SystemInfo = JSON.parse(readFileSync(sysInfoPath, "utf-8"));
-      const gpuStr = si.gpus.map((g) => `${g.name} (${g.vram_gb}GB)`).join(", ");
-      lines.push(`  System: ${si.cpu.model} (${si.cpu.cores}c) | ${gpuStr} | ${si.ram_gb}GB RAM | ${si.os}`);
-      lines.push(`  Image:  ${si.vllm_image} | Docker ${si.docker_version} | Kernel ${si.kernel}`);
-      lines.push("");
-    } catch {
-      // Non-critical
-    }
   }
 
   const rows: Row[] = results.map((r) => ({
@@ -87,10 +75,25 @@ function formatTable(results: BenchmarkResult[]): string {
   const lines: string[] = [
     "",
     "  GPU Benchmark Cost Summary",
-    "  " + sep,
-    "  " + headerRow,
-    "  " + sep,
   ];
+
+  // Show system info header if available
+  const sysInfoPath = join(absDir, "system_info.json");
+  if (existsSync(sysInfoPath)) {
+    try {
+      const si: SystemInfo = JSON.parse(readFileSync(sysInfoPath, "utf-8"));
+      const gpuStr = si.gpus.map((g) => `${g.name} (${g.vram_gb}GB)`).join(", ");
+      lines.push(`  System: ${si.cpu.model} (${si.cpu.cores}c) | ${gpuStr} | ${si.ram_gb}GB RAM | ${si.os}`);
+      lines.push(`  Image:  ${si.vllm_image} | Docker ${si.docker_version} | Kernel ${si.kernel}`);
+      lines.push("");
+    } catch {
+      // Non-critical
+    }
+  }
+
+  lines.push("  " + sep);
+  lines.push("  " + headerRow);
+  lines.push("  " + sep);
 
   // Sort by cost ascending
   const sorted = [...rows].sort((a, b) => {
@@ -111,7 +114,7 @@ function formatTable(results: BenchmarkResult[]): string {
 }
 
 function formatCost(val: number | null | undefined): string {
-  if (val === undefined || val === null || val === -1) return "N/A";
+  if (val === undefined || val === null) return "N/A";
   if (isNaN(val)) return "N/A";
   return `$${val.toFixed(4)}`;
 }
@@ -160,7 +163,7 @@ export function runSummarize(
 
   switch (format) {
     case "table":
-      console.log(formatTable(results));
+      console.log(formatTable(results, resultsDir));
       break;
     case "csv":
       console.log(formatCsv(results));

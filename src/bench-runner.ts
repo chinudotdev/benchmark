@@ -15,13 +15,23 @@ const WORDS = [
   "embedding", "weight",
 ];
 
-function makePrompt(numTokens: number): string {
+// ── Seeded PRNG (deterministic benchmarks) ─────────────────────────────────
+
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+function makePrompt(numTokens: number, rng: () => number): string {
   // Rough: 1 token ≈ 4 chars for English text
   const targetChars = numTokens * 4;
   const words: string[] = [];
   let totalLen = 0;
   while (totalLen < targetChars) {
-    const w = WORDS[Math.floor(Math.random() * WORDS.length)]!;
+    const w = WORDS[Math.floor(rng() * WORDS.length)]!;
     words.push(w);
     totalLen += w.length + 1;
   }
@@ -40,6 +50,7 @@ async function sendRequest(
   maxTokens: number,
   stream: boolean,
   retries: number = MAX_RETRIES,
+  includeStreamOptions: boolean = true,
 ): Promise<RequestResult> {
   const payload = {
     model,
@@ -47,6 +58,7 @@ async function sendRequest(
     max_tokens: maxTokens,
     temperature: 1.0,
     stream,
+    ...(stream && includeStreamOptions ? { stream_options: { include_usage: true } } : {}),
   };
 
   const start = performance.now();
@@ -104,9 +116,9 @@ async function sendRequest(
           }
         }
       }
-      // If no usage from stream, estimate from token count
+      // If no usage from stream (should be rare with stream_options)
       if (outputTokens === 0) {
-        outputTokens = maxTokens; // rough fallback
+        outputTokens = maxTokens; // fallback
       }
       return { success: true, outputTokens, latencyS };
     }
@@ -132,13 +144,67 @@ async function sendRequest(
   }
 }
 
+// ── Probe stream_options support ────────────────────────────────────────────
+//
+// Sends a single tiny streaming request with stream_options. If the server
+// rejects it (400), we know it's an older version and skip the parameter for
+// the rest of the benchmark. One cheap probe avoids N failed requests.
+
+async function probeStreamOptions(
+  url: string,
+  model: string,
+): Promise<boolean> {
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 1,
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    // 400 means the server doesn't recognize stream_options
+    if (resp.status === 400) {
+      return false;
+    }
+    // Consume the body to free the connection
+    if (resp.body) {
+      const reader = resp.body.getReader();
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    }
+    // Any non-400 response (200, 429, 500, etc.) means the server accepted
+    // the field — it's safe to include in subsequent requests.
+    return true;
+  } catch {
+    // Network error during probe — be conservative, skip stream_options
+    return false;
+  }
+}
+
 // ── Async benchmark ──────────────────────────────────────────────────────────
 
 export async function runBenchmark(opts: BenchRunnerOptions): Promise<BenchmarkMetrics> {
   const url = `http://${opts.host}:${opts.port}/v1/chat/completions`;
+  const rng = seededRandom(42);
   const prompts = Array.from({ length: opts.numPrompts }, () =>
-    makePrompt(opts.inputLen),
+    makePrompt(opts.inputLen, rng),
   );
+
+  // Probe stream_options support for streaming benchmarks
+  let useStreamOptions = true;
+  if (opts.stream) {
+    useStreamOptions = await probeStreamOptions(url, opts.model);
+    if (!useStreamOptions) {
+      console.log("  ⚠ Server doesn't support stream_options — token counts may be estimated");
+    }
+  }
 
   console.log(`\n  Sending ${opts.numPrompts} requests (concurrency=${opts.concurrency}, stream=${opts.stream})...`);
 
@@ -151,7 +217,7 @@ export async function runBenchmark(opts: BenchRunnerOptions): Promise<BenchmarkM
   const tasks = prompts.map(async (prompt) => {
     await semaphore.acquire();
     try {
-      const result = await sendRequest(url, opts.model, prompt, opts.outputLen, opts.stream, opts.retries);
+      const result = await sendRequest(url, opts.model, prompt, opts.outputLen, opts.stream, opts.retries, useStreamOptions);
       results.push(result);
       completed++;
       if (completed % 20 === 0 || completed === opts.numPrompts) {

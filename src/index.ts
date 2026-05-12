@@ -47,18 +47,36 @@ program
   .option("--force", "Re-run benchmarks even if results already exist")
   .option("--dry-run", "Print commands without executing")
   .action(async (opts) => {
+    // Parse and validate numeric options
+    const gpuRate = parseFloat(opts.gpuRate);
+    const gpuCount = parseInt(opts.gpuCount, 10);
+    const inputLen = parseInt(opts.inputLen, 10);
+    const outputLen = parseInt(opts.outputLen, 10);
+    const numPrompts = parseInt(opts.numPrompts, 10);
+    const maxModelLen = parseInt(opts.maxModelLen, 10);
+    const port = parseInt(opts.port, 10);
+    const concurrency = parseInt(opts.concurrency, 10);
+
+    const numericVals = { gpuRate, gpuCount, inputLen, outputLen, numPrompts, maxModelLen, port, concurrency };
+    for (const [key, val] of Object.entries(numericVals)) {
+      if (isNaN(val)) {
+        console.error(`Error: invalid number for ${key}`);
+        process.exit(1);
+      }
+    }
+
     await runBenchmarkCommand({
       modelId: opts.modelId,
       all: opts.all === true,
-      gpuRate: parseFloat(opts.gpuRate),
-      gpuCount: parseInt(opts.gpuCount, 10),
-      inputLen: parseInt(opts.inputLen, 10),
-      outputLen: parseInt(opts.outputLen, 10),
-      numPrompts: parseInt(opts.numPrompts, 10),
-      maxModelLen: parseInt(opts.maxModelLen, 10),
-      port: parseInt(opts.port, 10),
+      gpuRate,
+      gpuCount,
+      inputLen,
+      outputLen,
+      numPrompts,
+      maxModelLen,
+      port,
+      concurrency,
       resultsDir: resolve(opts.resultsDir),
-      concurrency: parseInt(opts.concurrency, 10),
       dryRun: opts.dryRun === true,
       modelsYaml: resolve(opts.modelsYaml),
       quant: opts.quant,

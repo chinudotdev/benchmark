@@ -95,7 +95,7 @@ export interface BenchmarkResult {
   };
   results: {
     output_tokens_per_sec: number;
-    cost_per_1m_output_tokens_usd: number; // -1 when cost is unavailable (TPS was 0)
+    cost_per_1m_output_tokens_usd: number | null; // null when cost is unavailable (TPS was 0)
   };
   system: SystemInfo;
   timestamp: string;
