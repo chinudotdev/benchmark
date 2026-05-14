@@ -44,6 +44,7 @@ program
   .option("--docker-image <image>", "Docker image to use (default: vllm/vllm-openai:latest)")
   .option("--gpu-ids <ids>", "GPU IDs for Docker (default: all). e.g. \"device=0\" or \"0,1\"")
   .option("--stream", "Use streaming requests for benchmark (default: false)")
+  .option("--retries <n>", "Number of retries per request", "2")
   .option("--force", "Re-run benchmarks even if results already exist")
   .option("--dry-run", "Print commands without executing")
   .action(async (opts) => {
@@ -57,7 +58,8 @@ program
     const port = parseInt(opts.port, 10);
     const concurrency = parseInt(opts.concurrency, 10);
 
-    const numericVals = { gpuRate, gpuCount, inputLen, outputLen, numPrompts, maxModelLen, port, concurrency };
+    const retries = parseInt(opts.retries, 10);
+    const numericVals = { gpuRate, gpuCount, inputLen, outputLen, numPrompts, maxModelLen, port, concurrency, retries };
     for (const [key, val] of Object.entries(numericVals)) {
       if (isNaN(val)) {
         console.error(`Error: invalid number for ${key}`);
@@ -85,6 +87,7 @@ program
       gpuIds: opts.gpuIds,
       stream: opts.stream === true,
       force: opts.force === true,
+      retries,
     });
   });
 

@@ -29,6 +29,7 @@ export interface BenchmarkOptions {
   gpuIds?: string;
   stream?: boolean;
   force?: boolean;
+  retries: number;
 }
 
 export interface GpuInfo {

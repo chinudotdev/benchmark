@@ -786,7 +786,7 @@ async function benchmarkModel(
     outputLen: opts.outputLen,
     concurrency: opts.concurrency,
     stream: opts.stream ?? false,
-    retries: 2,
+    retries: opts.retries,
   });
 
   printMetrics(metrics);
