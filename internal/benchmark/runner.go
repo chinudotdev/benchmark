@@ -144,10 +144,19 @@ func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt strin
 	if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		if retries > 0 {
-			attempt := cfg.Retries - retries
-			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-			if backoff > 8*time.Second {
-				backoff = 8 * time.Second
+			var backoff time.Duration
+			if resp.StatusCode == 429 {
+				// Honor Retry-After header if present
+				backoff = parseRetryAfter(resp.Header.Get("Retry-After"))
+				if backoff == 0 {
+					backoff = 5 * time.Second // default 429 backoff
+				}
+			} else {
+				attempt := cfg.Retries - retries
+				backoff = time.Duration(math.Pow(2, float64(attempt))) * time.Second
+				if backoff > 8*time.Second {
+					backoff = 8 * time.Second
+				}
 			}
 			time.Sleep(backoff)
 			return sendRequest(ctx, url, cfg, prompt, retries-1, useStreamOpts)
@@ -497,4 +506,11 @@ func newRNG(seed uint32) *rng { return &rng{state: seed} }
 func (r *rng) Intn(n int) int {
 	r.state = r.state*1664525 + 1013904223
 	return int((r.state >> 1) % uint32(n))
+}
+
+// parseRetryAfter parses the HTTP Retry-After header value.
+// It handles both seconds ("120") and HTTP-date formats.
+// Returns 0 if the value cannot be parsed.
+func parseRetryAfter(value string) time.Duration {
+	return parseRetryAfterHeader(value)
 }

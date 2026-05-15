@@ -28,6 +28,9 @@ func main() {
 	rootCmd.AddCommand(runCmd())
 	rootCmd.AddCommand(summarizeCmd())
 	rootCmd.AddCommand(sysinfoCmd())
+	rootCmd.AddCommand(reportCmd())
+	rootCmd.AddCommand(exportCmd())
+	rootCmd.AddCommand(preflightCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -201,6 +204,111 @@ func sysinfoCmd() *cobra.Command {
 	cmd.Flags().StringVar(&platformName, "platform", "", "Platform: nvidia, amd, tenstorrent (auto-detect if empty)")
 	cmd.Flags().StringVar(&dockerImage, "docker-image", "", "Docker image to display (default: vllm/vllm-openai:latest)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON instead of pretty table")
+
+	return cmd
+}
+
+func reportCmd() *cobra.Command {
+	var resultsDir string
+
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "Generate a structured Markdown report from benchmark results",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, err := filepath.Abs(resultsDir)
+			if err != nil {
+				return err
+			}
+			path, err := report.GenerateMarkdownReport(abs)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Report written to: %s\n", path)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&resultsDir, "results-dir", "./results", "Directory with result JSONs")
+
+	return cmd
+}
+
+func exportCmd() *cobra.Command {
+	var (
+		resultsDir string
+		output     string
+		list       bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export results as a reproducible tar.gz artifact",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, err := filepath.Abs(resultsDir)
+			if err != nil {
+				return err
+			}
+
+			if list {
+				// List contents of an existing archive
+				if len(args) == 0 {
+					return fmt.Errorf("provide archive path to list")
+				}
+				files, err := report.ListBundle(args[0])
+				if err != nil {
+					return err
+				}
+				for _, f := range files {
+					fmt.Println(f)
+				}
+				return nil
+			}
+
+			path, err := report.ExportBundle(abs, output)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Exported to: %s\n", path)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&resultsDir, "results-dir", "./results", "Directory with result JSONs")
+	cmd.Flags().StringVar(&output, "output", "", "Output archive path (default: <results-dir>/gpu-benchmark-export-<timestamp>.tar.gz)")
+	cmd.Flags().BoolVar(&list, "list", false, "List contents of an existing archive instead of creating one")
+
+	return cmd
+}
+
+func preflightCmd() *cobra.Command {
+	var (
+		resultsDir string
+		minDiskGB  int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "preflight",
+		Short: "Run pre-benchmark checks (Docker, disk space, GPU toolkit)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			abs, err := filepath.Abs(resultsDir)
+			if err != nil {
+				return err
+			}
+			results := sysinfo.PreflightChecks(ctx, abs, minDiskGB)
+			sysinfo.PrintPreflight(results)
+
+			for _, r := range results {
+				if !r.Passed {
+					return fmt.Errorf("preflight checks failed")
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&resultsDir, "results-dir", "./results", "Results directory (for disk space check)")
+	cmd.Flags().IntVar(&minDiskGB, "min-disk-gb", 50, "Minimum required disk space in GB")
 
 	return cmd
 }

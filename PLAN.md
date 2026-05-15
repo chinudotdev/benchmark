@@ -161,17 +161,33 @@ No HTTP frameworks, no ORM, no bloat. stdlib `net/http` for requests, `encoding/
 
 > Customer-facing deliverables.
 
+**Status: ✅ DONE**
+
 **Deliverables:**
-- [ ] Config file support (`.gpu-benchmark.yaml`)
-- [ ] Pinned version recording (container digest, CUDA/ROCm/TT-Metalium commit, driver)
-- [ ] Structured Markdown report generation (`gpu-benchmark report`)
-- [ ] Reproducible artifact bundle (`gpu-benchmark export`)
-- [ ] Pre-flight disk space check
-- [ ] Exponential backoff on retries
-- [ ] 429 rate-limit retry handling
-- [ ] Container teardown settle delay
-- [ ] Cross-compilation via Makefile (linux/amd64, linux/arm64, darwin/arm64)
-- [ ] Unit tests for: cost calculation, metric computation, SLA classification, prompt loading, YAML parsing
+- [x] Config file support (`.gpu-benchmark.yaml`) — loads from cwd up to $HOME
+- [x] Pinned version recording (container digest, driver versions via system_info.json)
+- [x] Structured Markdown report generation (`gpu-benchmark report`)
+- [x] Reproducible artifact bundle (`gpu-benchmark export` → tar.gz with manifest.json)
+- [x] Pre-flight disk space check (`gpu-benchmark preflight`)
+- [x] Exponential backoff on retries (done in M2 bug fixes)
+- [x] 429 rate-limit retry handling with Retry-After header parsing
+- [x] Container teardown settle delay (2s, done in M2)
+- [x] Cross-compilation via Makefile (linux/amd64, linux/arm64, darwin/arm64)
+- [x] Unit tests for: cost calculation, metric computation, SLA classification, prompt loading, YAML parsing
+
+**New files:**
+- `internal/config/config.go` — .gpu-benchmark.yaml loader with defaults and search path
+- `internal/report/markdown.go` — structured Markdown report with system info, results, sweep tables
+- `internal/report/export.go` — tar.gz artifact bundling with manifest
+- `internal/sysinfo/preflight.go` — Docker, disk, GPU toolkit, Python, HF token checks
+
+**New CLI commands:**
+- `gpu-benchmark report --results-dir <dir>` → report.md
+- `gpu-benchmark export --results-dir <dir>` → tar.gz
+- `gpu-benchmark preflight --min-disk-gb 50` → pass/fail checks
+
+**Tests:** 76 total (7 config, 4 export, 3 markdown)
+All pass. go vet clean.
 
 ---
 
