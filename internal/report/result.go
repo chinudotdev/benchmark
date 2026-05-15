@@ -33,13 +33,16 @@ type BenchmarkResult struct {
 
 // BenchConfig records the benchmark parameters used.
 type BenchConfig struct {
-	NumPrompts  int `json:"num_prompts"`
-	InputLen    int `json:"input_len"`
-	OutputLen   int `json:"output_len"`
-	MaxModelLen int `json:"max_model_len"`
-	Concurrency int `json:"concurrency"`
-	Stream      bool `json:"stream"`
-	WarmupReqs  int  `json:"warmup_reqs"`
+	NumPrompts    int    `json:"num_prompts"`
+	InputLen      int    `json:"input_len"`
+	OutputLen     int    `json:"output_len"`
+	MaxModelLen   int    `json:"max_model_len"`
+	Concurrency   int    `json:"concurrency"`
+	Stream        bool   `json:"stream"`
+	WarmupReqs    int    `json:"warmup_reqs"`
+	SeqProfile    string `json:"seq_profile,omitempty"`
+	TrafficProfile string `json:"traffic_profile,omitempty"`
+	RepeatIdx     int    `json:"repeat_idx,omitempty"`
 }
 
 // CostResult holds cost estimates.

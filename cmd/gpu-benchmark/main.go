@@ -81,6 +81,13 @@ func runCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "Re-run benchmarks even if results already exist")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print commands without executing")
 
+	// Sweep options (Milestone 3)
+	cmd.Flags().StringVar(&opts.ConcurrencySweep, "concurrency-sweep", "", "Comma-separated concurrency levels to sweep (e.g. \"1,2,4,8,16,32,64,128\")")
+	cmd.Flags().BoolVar(&opts.SeqSweep, "seq-sweep", false, "Run all 5 sequence-length profiles from the framework spec")
+	cmd.Flags().IntVar(&opts.Repeat, "repeat", 1, "Repeat each benchmark cell N times for mean ± stddev")
+	cmd.Flags().StringVar(&opts.TrafficProfile, "traffic-profile", "", "Traffic profile: single-stream, interactive, high-concurrency, offline-batch")
+	cmd.Flags().BoolVar(&opts.VerifyTokens, "verify-tokens", false, "Verify prompt token counts via /tokenize endpoint")
+
 	// Resolve paths
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		abs, err := filepath.Abs(opts.ResultsDir)

@@ -48,6 +48,13 @@ type Options struct {
 	DryRun      bool
 	Retries     int
 	WarmupReqs  int
+
+	// Sweep options (Milestone 3)
+	ConcurrencySweep string // comma-separated: "1,2,4,8,16,32,64,128"
+	SeqSweep         bool   // run all 5 sequence-length profiles
+	Repeat           int    // repeat each cell N times (default: 1)
+	TrafficProfile   string // "single-stream", "interactive", "high-concurrency", "offline-batch", or ""
+	VerifyTokens     bool   // verify prompt token counts via /tokenize
 }
 
 // Run executes the full benchmark pipeline.
@@ -141,9 +148,15 @@ func Run(opts Options) error {
 		default:
 		}
 
-		if err := benchmarkModel(ctx, plat, dmgr, model, opts, hw, sysInfo); err != nil {
-			log.Printf("ERROR benchmarking %s: %v", model.Name, err)
-			// Continue with next model rather than failing entirely
+		isSweep := opts.ConcurrencySweep != "" || opts.SeqSweep || opts.Repeat > 1
+		if isSweep {
+			if err := benchmarkModelSweep(ctx, plat, dmgr, model, opts, hw, sysInfo); err != nil {
+				log.Printf("ERROR sweep benchmarking %s: %v", model.Name, err)
+			}
+		} else {
+			if err := benchmarkModel(ctx, plat, dmgr, model, opts, hw, sysInfo); err != nil {
+				log.Printf("ERROR benchmarking %s: %v", model.Name, err)
+			}
 		}
 	}
 
@@ -324,6 +337,228 @@ func benchmarkModel(
 	time.Sleep(2 * time.Second)
 
 	return nil
+}
+
+// benchmarkModelSweep runs the full sweep pipeline for a single model.
+// It handles: concurrency sweep, seq-profile sweep, repeat, and matrix orchestration.
+func benchmarkModelSweep(
+	ctx context.Context,
+	plat platform.Platform,
+	dmgr *docker.Manager,
+	model platform.ModelConfig,
+	opts Options,
+	hw *platform.HardwareInfo,
+	sysInfo *report.SystemInfo,
+) error {
+	fmt.Println()
+	printHeader(fmt.Sprintf("Sweep Benchmarking: %s", model.Name))
+
+	// VRAM check
+	if len(hw.Devices) > 0 {
+		firstGPU := hw.Devices[0]
+		if model.MinVRAM_GB > 0 && firstGPU.VRAM_GB < model.MinVRAM_GB && !opts.DryRun {
+			log.Printf("Skipping %s — requires %dGB, GPU has %dGB", model.Name, model.MinVRAM_GB, firstGPU.VRAM_GB)
+			return nil
+		}
+	}
+
+	// Download model
+	if !opts.DryRun {
+		download.FixCachePermissions()
+		if err := download.Download(ctx, model.ID, opts.HFToken); err != nil {
+			return fmt.Errorf("download model: %w", err)
+		}
+	}
+
+	// Build container config
+	containerCfg := plat.ContainerConfig(model, platform.RunOptions{
+		GPURate: opts.GPURate, GPUCount: opts.GPUCount, MaxModelLen: opts.MaxModelLen,
+		Port: opts.Port, Quant: opts.Quant, DockerImage: opts.DockerImage,
+		GPUIDs: opts.GPUIDs, HFToken: opts.HFToken, Stream: opts.Stream,
+		Force: opts.Force, DryRun: opts.DryRun,
+	})
+
+	if opts.DryRun {
+		log.Println("[DRY RUN] Would start container and run sweep")
+		return nil
+	}
+
+	// Start container
+	containerName := fmt.Sprintf("vllm_bench_%d", opts.Port)
+	dmgr.Stop(containerName)
+
+	if err := dmgr.Run(ctx, containerCfg); err != nil {
+		return fmt.Errorf("start container: %w", err)
+	}
+
+	// Wait for healthy
+	coldStart, err := dmgr.WaitHealthy(ctx, opts.Port, 10*time.Minute)
+	if err != nil {
+		return fmt.Errorf("server health check: %w", err)
+	}
+	log.Printf("Cold start time: %v", coldStart.Round(time.Second))
+
+	// Ensure container is stopped when we're done
+	defer func() {
+		dmgr.Stop(containerName)
+		time.Sleep(2 * time.Second)
+	}()
+
+	// Load prompt dataset
+	dataset, err := benchmark.LoadPromptDataset()
+	if err != nil {
+		log.Printf("Warning: could not load prompt dataset, using synthetic: %v", err)
+		dataset = nil
+	}
+
+	// Parse concurrency levels
+	concLevels := parseConcurrencyLevels(opts.Concurrency, opts.ConcurrencySweep)
+
+	// Token verification (optional)
+	if opts.VerifyTokens && dataset != nil {
+		log.Println("Verifying prompt token counts via /tokenize...")
+		samplePrompts := dataset.GeneratePrompts(5, opts.InputLen)
+		counts, err := benchmark.TokenizeBatch(ctx, "localhost", opts.Port, model.ID, samplePrompts, opts.InputLen, 30.0)
+		if err != nil {
+			log.Printf("Warning: token verification failed: %v", err)
+		} else {
+			log.Printf("  Token counts: %v (target: %d)", counts, opts.InputLen)
+		}
+	}
+
+	// Determine seq profiles to sweep
+	var seqProfiles []benchmark.SeqProfileEntry
+	if opts.SeqSweep {
+		for _, p := range workload.SeqProfiles {
+			seqProfiles = append(seqProfiles, benchmark.SeqProfileEntry{
+				Name:         p.Name,
+				InputTokens:  p.InputTokens,
+				OutputTokens: p.OutputTokens,
+			})
+		}
+		log.Printf("Seq profiles: %d profiles", len(seqProfiles))
+	} else {
+		// Single profile from --input-len / --output-len
+		seqProfiles = []benchmark.SeqProfileEntry{{
+			Name:         "custom",
+			InputTokens:  opts.InputLen,
+			OutputTokens: opts.OutputLen,
+		}}
+	}
+
+	repeat := opts.Repeat
+	if repeat < 1 {
+		repeat = 1
+	}
+
+	log.Println("Running sweep...")
+	log.Printf("  Concurrency levels: %v", concLevels)
+	log.Printf("  Seq profiles:       %d", len(seqProfiles))
+	log.Printf("  Repeats per cell:   %d", repeat)
+	log.Printf("  Total cells:        %d", len(seqProfiles)*len(concLevels)*repeat)
+
+	// Create sweep results subdirectory
+	sweepDir := filepath.Join(opts.ResultsDir, safeName(model.Name)+"_sweep")
+	if err := os.MkdirAll(sweepDir, 0o755); err != nil {
+		return fmt.Errorf("create sweep dir: %w", err)
+	}
+
+	// Run the sweep
+	sweepCfg := benchmark.SweepConfig{
+		Host:              "localhost",
+		Port:              opts.Port,
+		Model:             model.ID,
+		Stream:            opts.Stream,
+		Retries:           opts.Retries,
+		WarmupReqs:        opts.WarmupReqs,
+		ConcurrencyLevels: concLevels,
+		NumPrompts:        opts.NumPrompts,
+		Repeat:            repeat,
+		Prompts:           dataset,
+	}
+
+	var sweepResults []benchmark.SweepResult
+	if opts.SeqSweep {
+		sweepResults, err = benchmark.RunSeqSweep(ctx, sweepCfg, seqProfiles)
+	} else {
+		sweepCfg.InputLen = opts.InputLen
+		sweepCfg.OutputLen = opts.OutputLen
+		sweepResults, err = benchmark.RunConcurrencySweep(ctx, sweepCfg)
+	}
+	if err != nil {
+		return fmt.Errorf("sweep run: %w", err)
+	}
+
+	// GPU name for results
+	gpuName := "unknown"
+	if len(hw.Devices) > 0 {
+		gpuName = hw.Devices[0].Name
+	}
+
+	// Write per-cell results
+	for _, sr := range sweepResults {
+		metricsJSON, _ := json.Marshal(sr.Metrics)
+		cellResult := &report.SweepCellResult{
+			ModelID:   model.ID,
+			ModelName: model.Name,
+			Quant:     model.Quant,
+			Platform:  plat.Name(),
+			GPU:       gpuName,
+			GPUCount:  opts.GPUCount,
+			GPURate:   opts.GPURate,
+			SweepConfig: report.SweepCellConfig{
+				InputLen:      sr.InputLen,
+				OutputLen:     sr.OutputLen,
+				Concurrency:   sr.Concurrency,
+				NumPrompts:    opts.NumPrompts,
+				SeqProfile:    seqProfileName(seqProfiles, sr.InputLen, sr.OutputLen),
+				TrafficProfile: opts.TrafficProfile,
+				Stream:        opts.Stream,
+			},
+			RepeatIdx: sr.RepeatIdx,
+			Metrics:   metricsJSON,
+			Error:     sr.Error,
+			System:    sysInfo,
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+		if writeErr := report.WriteSweepCell(sweepDir, cellResult); writeErr != nil {
+			log.Printf("Warning: failed to write sweep cell: %v", writeErr)
+		}
+	}
+
+	// Print aggregated results
+	aggregated := benchmark.AggregateSweep(sweepResults)
+	benchmark.PrintSweepTable(aggregated)
+
+	log.Printf("Sweep complete. Results in: %s/", sweepDir)
+	return nil
+}
+
+// parseConcurrencyLevels parses the concurrency-sweep flag or falls back to the single concurrency level.
+func parseConcurrencyLevels(single int, sweep string) []int {
+	if sweep != "" {
+		var levels []int
+		for _, s := range strings.Split(sweep, ",") {
+			s = strings.TrimSpace(s)
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				levels = append(levels, n)
+			}
+		}
+		if len(levels) > 0 {
+			return levels
+		}
+	}
+	return []int{single}
+}
+
+// seqProfileName finds the profile name for the given input/output lengths.
+func seqProfileName(profiles []benchmark.SeqProfileEntry, inLen, outLen int) string {
+	for _, p := range profiles {
+		if p.InputTokens == inLen && p.OutputTokens == outLen {
+			return p.Name
+		}
+	}
+	return fmt.Sprintf("in%d-out%d", inLen, outLen)
 }
 
 // detectPlatform auto-detects or selects the platform.

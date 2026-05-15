@@ -98,4 +98,5 @@ type RunnerConfig struct {
 	Stream      bool
 	Retries     int
 	WarmupReqs  int // number of warmup requests to discard
+	TrafficProfile string // traffic profile name: single-stream, interactive, high-concurrency, offline-batch
 }

@@ -17,15 +17,31 @@ import (
 
 // Run executes the benchmark load generation against the target endpoint.
 func Run(ctx context.Context, cfg RunnerConfig) (*Metrics, error) {
+	return RunWithDataset(ctx, cfg, nil)
+}
+
+// RunWithDataset executes the benchmark with an optional prompt dataset.
+// If dataset is nil, it falls back to synthetic prompt generation.
+func RunWithDataset(ctx context.Context, cfg RunnerConfig, dataset *PromptDataset) (*Metrics, error) {
 	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", cfg.Host, cfg.Port)
 
 	// Generate prompts
-	prompts := generatePrompts(cfg.NumPrompts, cfg.InputLen)
+	var prompts []string
+	if dataset != nil {
+		prompts = dataset.GeneratePrompts(cfg.NumPrompts, cfg.InputLen)
+	} else {
+		prompts = generatePrompts(cfg.NumPrompts, cfg.InputLen)
+	}
 
 	// Warmup phase — use separate prompts so server cache isn't pre-warmed
 	// with the exact benchmark prompts.
 	if cfg.WarmupReqs > 0 {
-		warmupPrompts := generatePrompts(cfg.WarmupReqs, cfg.InputLen)
+		var warmupPrompts []string
+		if dataset != nil {
+			warmupPrompts = dataset.GeneratePrompts(cfg.WarmupReqs, cfg.InputLen)
+		} else {
+			warmupPrompts = generatePrompts(cfg.WarmupReqs, cfg.InputLen)
+		}
 		log.Printf("  Warming up (%d requests)...", cfg.WarmupReqs)
 		for i := 0; i < cfg.WarmupReqs; i++ {
 			sendRequest(ctx, url, cfg, warmupPrompts[i], 1, true)

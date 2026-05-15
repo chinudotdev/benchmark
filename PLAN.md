@@ -96,16 +96,26 @@ No HTTP frameworks, no ORM, no bloat. stdlib `net/http` for requests, `encoding/
 
 > From single-config runs to full matrix execution.
 
+**Status: ✅ DONE**
+
 **Deliverables:**
-- [ ] Sequence-length profiles (5 profiles from framework spec)
-- [ ] `--seq-sweep` flag to run all profiles
-- [ ] Concurrency sweep (`--concurrency-sweep 1,2,4,8,16,32,64,128`)
-- [ ] Traffic profiles (single-stream, interactive, high-concurrency, offline-batch)
-- [ ] Fixed prompt dataset loader (replace random word generator)
-- [ ] Token count verification via `/tokenize` endpoint
-- [ ] `--repeat N` with mean ± stddev aggregation
-- [ ] Matrix orchestration: model × seq-profile × concurrency × traffic-profile
-- [ ] Matrix result storage (per-cell JSON files)
+- [x] Sequence-length profiles (5 profiles from framework spec)
+- [x] `--seq-sweep` flag to run all profiles
+- [x] Concurrency sweep (`--concurrency-sweep 1,2,4,8,16,32,64,128`)
+- [x] Traffic profiles (single-stream, interactive, high-concurrency, offline-batch)
+- [x] Fixed prompt dataset loader (190 real-world prompts, embedded in binary)
+- [x] Token count verification via `/tokenize` endpoint
+- [x] `--repeat N` with mean ± stddev aggregation
+- [x] Matrix orchestration: model × seq-profile × concurrency × traffic-profile
+- [x] Matrix result storage (per-cell JSON files in `<model>_sweep/` subdirectory)
+
+**New files:**
+- `internal/benchmark/prompts.go` — PromptDataset with embedded prompt corpus
+- `internal/benchmark/prompts.txt` — 190 real-world prompts (embedded via go:embed)
+- `internal/benchmark/tokenize.go` — /tokenize endpoint verification
+- `internal/benchmark/sweep.go` — RunConcurrencySweep, RunSeqSweep, AggregateSweep
+- `internal/report/sweep.go` — per-cell JSON storage, load, sort
+- Tests: prompts_test.go (8), sweep_test.go (6), sweep_test.go (4)
 
 **Test:** `gpu-benchmark run --model-id Qwen/Qwen3-8B --seq-sweep --repeat 3` produces results for all 5 seq profiles with confidence intervals.
 
@@ -208,6 +218,6 @@ gpu-benchmark/
 └── README.md
 ```
 
-## Current focus: Milestone 1
+## Current focus: Milestone 4 (AMD + Tenstorrent backends)
 
 We scaffold the project structure, implement the `Platform` interface, get the NVIDIA path working end-to-end with Docker orchestration, load generation, metric collection, and result persistence.
