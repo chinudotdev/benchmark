@@ -66,10 +66,36 @@ func Run(opts Options) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Auto-detect platform + hardware in one call
-	plat, hw, err := platform.AutoDetect(ctx, opts.Platform)
-	if err != nil {
-		return fmt.Errorf("platform detection: %w", err)
+	var (
+		plat platform.Platform
+		hw   *platform.HardwareInfo
+		err  error
+	)
+
+	if opts.DryRun {
+		// Dry-run: use requested platform or default to nvidia for preview
+		platName := opts.Platform
+		if platName == "" {
+			platName = "nvidia"
+			log.Println("[DRY RUN] No --platform specified, previewing as nvidia")
+		}
+		plat, hw, err = platform.AutoDetect(ctx, platName)
+		if err != nil {
+			// No hardware? Use a synthetic platform for preview.
+			log.Printf("[DRY RUN] %v — using synthetic %s config", err, platName)
+			plat = platform.NewDryRunPlatform(platName)
+			hw = &platform.HardwareInfo{
+				Platform: platName,
+				Devices: []platform.DeviceInfo{
+					{Name: "Dry-Run GPU", VRAM_GB: 80, DriverVersion: "dry-run", RuntimeVersion: "dry-run"},
+				},
+			}
+		}
+	} else {
+		plat, hw, err = platform.AutoDetect(ctx, opts.Platform)
+		if err != nil {
+			return fmt.Errorf("platform detection: %w", err)
+		}
 	}
 
 	log.Printf("Platform: %s", plat.Name())
@@ -86,24 +112,27 @@ func Run(opts Options) error {
 	}
 
 	// Create Docker manager
-	dmgr, err := docker.NewManager(ctx)
-	if err != nil {
-		return fmt.Errorf("docker init: %w", err)
+	var dmgr *docker.Manager
+	if !opts.DryRun {
+		dmgr, err = docker.NewManager(ctx)
+		if err != nil {
+			return fmt.Errorf("docker init: %w", err)
+		}
+
+		// Single signal handler: cancel in-flight ops + stop containers + exit
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			fmt.Printf("\nReceived %v, cleaning up...\n", sig)
+			cancel()       // stop in-flight operations
+			dmgr.Cleanup() // stop containers
+			os.Exit(130)
+		}()
+
+		// Cleanup on normal exit
+		defer dmgr.Cleanup()
 	}
-
-	// Single signal handler: cancel in-flight ops + stop containers + exit
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		fmt.Printf("\nReceived %v, cleaning up...\n", sig)
-		cancel()       // stop in-flight operations
-		dmgr.Cleanup() // stop containers
-		os.Exit(130)
-	}()
-
-	// Cleanup on normal exit
-	defer dmgr.Cleanup()
 
 	// Pull Docker image
 	image := plat.GetDockerImage(opts.DockerImage)

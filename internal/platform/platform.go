@@ -218,3 +218,64 @@ type RunOptions struct {
 	Force        bool
 	DryRun       bool
 }
+
+// DryRunPlatform is a synthetic platform used when --dry-run is specified
+// and no real hardware is available. It produces valid container configs
+// for preview purposes.
+type DryRunPlatform struct {
+	name string
+}
+
+// NewDryRunPlatform returns a synthetic platform for dry-run mode.
+func NewDryRunPlatform(name string) *DryRunPlatform {
+	return &DryRunPlatform{name: name}
+}
+
+func (p *DryRunPlatform) Name() string { return p.name }
+
+func (p *DryRunPlatform) DetectHardware(_ context.Context) (*HardwareInfo, error) {
+	return &HardwareInfo{
+		Platform: p.name,
+		Devices:  []DeviceInfo{{Name: "Dry-Run GPU", VRAM_GB: 80}},
+	}, nil
+}
+
+func (p *DryRunPlatform) DetectOrInstallRuntime(_ context.Context) error { return nil }
+
+func (p *DryRunPlatform) GetDockerImage(override string) string {
+	if override != "" {
+		return override
+	}
+	switch p.name {
+	case "amd":
+		return "rocm/vllm:latest"
+	case "tenstorrent":
+		return "ghcr.io/tenstorrent/tt-inference-server:latest"
+	default:
+		return "vllm/vllm-openai:latest"
+	}
+}
+
+func (p *DryRunPlatform) ContainerConfig(model ModelConfig, opts RunOptions) *ContainerConfig {
+	img := p.GetDockerImage(opts.DockerImage)
+
+	var gpuFlags []string
+	switch p.name {
+	case "amd":
+		gpuFlags = []string{"--device", "/dev/kfd", "--device", "/dev/dri", "--group-add", "video"}
+	case "tenstorrent":
+		gpuFlags = []string{"--device", "/dev/tenstorrent"}
+	default:
+		gpuFlags = []string{"--gpus", "all"}
+	}
+
+	return &ContainerConfig{
+		Image:     img,
+		Name:      fmt.Sprintf("vllm_bench_%d", opts.Port),
+		GPUFlags:  gpuFlags,
+		ExtraArgs: []string{model.ID, "--port", "8000"},
+		Port:      opts.Port,
+	}
+}
+
+func (p *DryRunPlatform) HealthEndpoint() string { return "/health" }

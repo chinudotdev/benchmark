@@ -53,6 +53,79 @@ func TestAutoDetectCaseInsensitive(t *testing.T) {
 	}
 }
 
+// ── DryRunPlatform ─────────────────────────────────────────────────────────
+
+func TestDryRunPlatform(t *testing.T) {
+	p := NewDryRunPlatform("nvidia")
+	if p.Name() != "nvidia" {
+		t.Errorf("Name() = %q, want nvidia", p.Name())
+	}
+
+	hw, err := p.DetectHardware(t.Context())
+	if err != nil {
+		t.Fatalf("DetectHardware error: %v", err)
+	}
+	if hw.Platform != "nvidia" {
+		t.Errorf("Platform = %q", hw.Platform)
+	}
+	if len(hw.Devices) == 0 || hw.Devices[0].Name != "Dry-Run GPU" {
+		t.Error("expected synthetic Dry-Run GPU")
+	}
+
+	if err := p.DetectOrInstallRuntime(t.Context()); err != nil {
+		t.Errorf("DetectOrInstallRuntime should be nil, got: %v", err)
+	}
+	if p.HealthEndpoint() != "/health" {
+		t.Errorf("HealthEndpoint = %q", p.HealthEndpoint())
+	}
+}
+
+func TestDryRunPlatformImages(t *testing.T) {
+	tests := []struct {
+		platform string
+		want     string
+	}{
+		{"nvidia", "vllm/vllm-openai:latest"},
+		{"amd", "rocm/vllm:latest"},
+		{"tenstorrent", "ghcr.io/tenstorrent/tt-inference-server:latest"},
+	}
+	for _, tt := range tests {
+		p := NewDryRunPlatform(tt.platform)
+		if img := p.GetDockerImage(""); img != tt.want {
+			t.Errorf("%s: GetDockerImage() = %q, want %q", tt.platform, img, tt.want)
+		}
+	}
+	// Override
+	p := NewDryRunPlatform("nvidia")
+	if img := p.GetDockerImage("custom/img:v1"); img != "custom/img:v1" {
+		t.Errorf("override = %q", img)
+	}
+}
+
+func TestDryRunContainerConfig(t *testing.T) {
+	p := NewDryRunPlatform("amd")
+	model := ModelConfig{ID: "test/model", TP: 1}
+	opts := RunOptions{Port: 9000}
+
+	cfg := p.ContainerConfig(model, opts)
+	if cfg.Image != "rocm/vllm:latest" {
+		t.Errorf("Image = %q", cfg.Image)
+	}
+	if cfg.Port != 9000 {
+		t.Errorf("Port = %d", cfg.Port)
+	}
+	// AMD should have /dev/kfd
+	foundKFD := false
+	for _, f := range cfg.GPUFlags {
+		if f == "/dev/kfd" {
+			foundKFD = true
+		}
+	}
+	if !foundKFD {
+		t.Error("AMD dry-run missing /dev/kfd")
+	}
+}
+
 // ── AMD Platform ────────────────────────────────────────────────────────────
 
 func TestAMDPlatformName(t *testing.T) {
