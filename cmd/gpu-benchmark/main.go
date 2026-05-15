@@ -7,15 +7,17 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/chinudotdev/gpu-benchmark/internal/config"
 	"github.com/chinudotdev/gpu-benchmark/internal/orchestrator"
 	"github.com/chinudotdev/gpu-benchmark/internal/platform"
+	"github.com/chinudotdev/gpu-benchmark/internal/quality"
 	"github.com/chinudotdev/gpu-benchmark/internal/report"
 	"github.com/chinudotdev/gpu-benchmark/internal/sysinfo"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version = "1.0.0"
+	version = "dev"
 )
 
 func main() {
@@ -31,11 +33,15 @@ func main() {
 	rootCmd.AddCommand(reportCmd())
 	rootCmd.AddCommand(exportCmd())
 	rootCmd.AddCommand(preflightCmd())
+	rootCmd.AddCommand(compareCmd())
+	rootCmd.AddCommand(qualityCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
+
+// ── run ────────────────────────────────────────────────────────────────────
 
 func runCmd() *cobra.Command {
 	opts := &orchestrator.Options{}
@@ -43,7 +49,13 @@ func runCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run GPU benchmarks against one or all models",
+		Long: `Run GPU inference benchmarks against an OpenAI-compatible endpoint.
+
+Loads configuration from .gpu-benchmark.yaml if found (searches cwd → parent dirs → $HOME).
+CLI flags always override config file values.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Merge config file → opts (only for flags not explicitly set)
+			mergeConfig(cmd, opts)
 			return orchestrator.Run(*opts)
 		},
 	}
@@ -84,14 +96,18 @@ func runCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "Re-run benchmarks even if results already exist")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print commands without executing")
 
-	// Sweep options (Milestone 3)
-	cmd.Flags().StringVar(&opts.ConcurrencySweep, "concurrency-sweep", "", "Comma-separated concurrency levels to sweep (e.g. \"1,2,4,8,16,32,64,128\")")
+	// Sweep options
+	cmd.Flags().StringVar(&opts.ConcurrencySweep, "concurrency-sweep", "", "Comma-separated concurrency levels (e.g. \"1,2,4,8,16,32,64,128\")")
 	cmd.Flags().BoolVar(&opts.SeqSweep, "seq-sweep", false, "Run all 5 sequence-length profiles from the framework spec")
 	cmd.Flags().IntVar(&opts.Repeat, "repeat", 1, "Repeat each benchmark cell N times for mean ± stddev")
 	cmd.Flags().StringVar(&opts.TrafficProfile, "traffic-profile", "", "Traffic profile: single-stream, interactive, high-concurrency, offline-batch")
 	cmd.Flags().BoolVar(&opts.VerifyTokens, "verify-tokens", false, "Verify prompt token counts via /tokenize endpoint")
 
-	// Resolve paths
+	// Quality gate
+	cmd.Flags().BoolVar(&opts.QualityGate, "quality-gate", false, "Run quality gate (lm-eval) after benchmark")
+	cmd.Flags().StringVar(&opts.QualityTasks, "quality-tasks", "", "Quality gate tasks: comma-separated (default: mmlu,humaneval,gsm8k)")
+
+	// Pre-run: resolve paths, merge config, validate
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		abs, err := filepath.Abs(opts.ResultsDir)
 		if err != nil {
@@ -105,7 +121,6 @@ func runCmd() *cobra.Command {
 		}
 		opts.ModelsYAML = abs
 
-		// HF token from env if not provided
 		if opts.HFToken == "" {
 			opts.HFToken = os.Getenv("HF_TOKEN")
 			if opts.HFToken == "" {
@@ -113,7 +128,6 @@ func runCmd() *cobra.Command {
 			}
 		}
 
-		// Validate: need --model-id or --all
 		if !opts.AllModels && opts.ModelID == "" {
 			return fmt.Errorf("provide --model-id <id> or --all")
 		}
@@ -123,6 +137,104 @@ func runCmd() *cobra.Command {
 
 	return cmd
 }
+
+// mergeConfig loads .gpu-benchmark.yaml and applies values for flags that
+// weren't explicitly set by the user. CLI flags always win.
+func mergeConfig(cmd *cobra.Command, opts *orchestrator.Options) {
+	cfg, err := config.LoadFile()
+	if err != nil || cfg == nil {
+		return
+	}
+
+	// For each config field, only apply if the corresponding flag wasn't changed
+	// from its default. cobra doesn't expose "was flag set?" directly for non-PersistentFlags,
+	// so we use the Changed method via FlagSet.
+	flags := cmd.Flags()
+
+	mergeString := func(name string, target *string) {
+		if !flags.Changed(name) && cfgField(name, cfg) != "" {
+			*target = cfgFieldString(name, cfg)
+		}
+	}
+	mergeInt := func(name string, target *int, cfgVal int) {
+		if !flags.Changed(name) && cfgVal != 0 {
+			*target = cfgVal
+		}
+	}
+	mergeFloat64 := func(name string, target *float64, cfgVal float64) {
+		if !flags.Changed(name) && cfgVal != 0 {
+			*target = cfgVal
+		}
+	}
+	mergeBool := func(name string, target *bool, cfgVal bool) {
+		if !flags.Changed(name) && cfgVal {
+			*target = cfgVal
+		}
+	}
+
+	mergeString("model-id", &opts.ModelID)
+	mergeString("platform", &opts.Platform)
+	mergeString("models-yaml", &opts.ModelsYAML)
+	mergeString("quant", &opts.Quant)
+	mergeString("hf-token", &opts.HFToken)
+	mergeString("docker-image", &opts.DockerImage)
+	mergeString("gpu-ids", &opts.GPUIDs)
+	mergeString("results-dir", &opts.ResultsDir)
+	mergeString("concurrency-sweep", &opts.ConcurrencySweep)
+	mergeString("traffic-profile", &opts.TrafficProfile)
+
+	mergeFloat64("gpu-rate", &opts.GPURate, cfg.GPURate)
+	mergeInt("gpu-count", &opts.GPUCount, cfg.GPUCount)
+	mergeInt("input-len", &opts.InputLen, cfg.InputLen)
+	mergeInt("output-len", &opts.OutputLen, cfg.OutputLen)
+	mergeInt("num-prompts", &opts.NumPrompts, cfg.NumPrompts)
+	mergeInt("max-model-len", &opts.MaxModelLen, cfg.MaxModelLen)
+	mergeInt("port", &opts.Port, cfg.Port)
+	mergeInt("concurrency", &opts.Concurrency, cfg.Concurrency)
+	mergeInt("retries", &opts.Retries, cfg.Retries)
+	mergeInt("warmup", &opts.WarmupReqs, cfg.WarmupReqs)
+	mergeInt("repeat", &opts.Repeat, cfg.Repeat)
+
+	mergeBool("all", &opts.AllModels, cfg.AllModels)
+	mergeBool("stream", &opts.Stream, cfg.Stream != nil && *cfg.Stream)
+	mergeBool("force", &opts.Force, cfg.Force)
+	mergeBool("dry-run", &opts.DryRun, cfg.DryRun)
+	mergeBool("seq-sweep", &opts.SeqSweep, cfg.SeqSweep)
+	mergeBool("verify-tokens", &opts.VerifyTokens, cfg.VerifyTokens)
+}
+
+// cfgFieldString returns string config values by flag name.
+func cfgFieldString(name string, cfg *config.Config) string {
+	switch name {
+	case "model-id":
+		return cfg.ModelID
+	case "platform":
+		return cfg.Platform
+	case "models-yaml":
+		return cfg.ModelsYAML
+	case "quant":
+		return cfg.Quant
+	case "hf-token":
+		return cfg.HFToken
+	case "docker-image":
+		return cfg.DockerImage
+	case "gpu-ids":
+		return cfg.GPUIDs
+	case "results-dir":
+		return cfg.ResultsDir
+	case "concurrency-sweep":
+		return cfg.ConcurrencySweep
+	case "traffic-profile":
+		return cfg.TrafficProfile
+	default:
+		return ""
+	}
+}
+
+// cfgField is unused but kept for interface compat.
+func cfgField(name string, cfg *config.Config) string { return cfgFieldString(name, cfg) }
+
+// ── summarize ──────────────────────────────────────────────────────────────
 
 func summarizeCmd() *cobra.Command {
 	var (
@@ -148,6 +260,8 @@ func summarizeCmd() *cobra.Command {
 	return cmd
 }
 
+// ── sysinfo ────────────────────────────────────────────────────────────────
+
 func sysinfoCmd() *cobra.Command {
 	var (
 		platformName string
@@ -160,11 +274,8 @@ func sysinfoCmd() *cobra.Command {
 		Short: "Display current system configuration (GPU, CPU, RAM, OS, Docker)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-
-			// Collect OS-level info
 			si := sysinfo.Collect(ctx)
 
-			// Detect platform and collect GPU info
 			var hw *platform.HardwareInfo
 			plat, err := detectPlatform(ctx, platformName)
 			if err != nil {
@@ -208,6 +319,8 @@ func sysinfoCmd() *cobra.Command {
 	return cmd
 }
 
+// ── report ─────────────────────────────────────────────────────────────────
+
 func reportCmd() *cobra.Command {
 	var resultsDir string
 
@@ -229,9 +342,10 @@ func reportCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&resultsDir, "results-dir", "./results", "Directory with result JSONs")
-
 	return cmd
 }
+
+// ── export ─────────────────────────────────────────────────────────────────
 
 func exportCmd() *cobra.Command {
 	var (
@@ -250,7 +364,6 @@ func exportCmd() *cobra.Command {
 			}
 
 			if list {
-				// List contents of an existing archive
 				if len(args) == 0 {
 					return fmt.Errorf("provide archive path to list")
 				}
@@ -274,11 +387,13 @@ func exportCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&resultsDir, "results-dir", "./results", "Directory with result JSONs")
-	cmd.Flags().StringVar(&output, "output", "", "Output archive path (default: <results-dir>/gpu-benchmark-export-<timestamp>.tar.gz)")
-	cmd.Flags().BoolVar(&list, "list", false, "List contents of an existing archive instead of creating one")
+	cmd.Flags().StringVar(&output, "output", "", "Output path (default: <results-dir>/gpu-benchmark-export-<timestamp>.tar.gz)")
+	cmd.Flags().BoolVar(&list, "list", false, "List contents of an existing archive")
 
 	return cmd
 }
+
+// ── preflight ──────────────────────────────────────────────────────────────
 
 func preflightCmd() *cobra.Command {
 	var (
@@ -312,6 +427,139 @@ func preflightCmd() *cobra.Command {
 
 	return cmd
 }
+
+// ── compare ────────────────────────────────────────────────────────────────
+
+func compareCmd() *cobra.Command {
+	var (
+		format    string
+		crossover bool
+		sla       bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "compare <dir_a> <dir_b>",
+		Short: "Compare benchmark results from two directories",
+		Long: `Compare benchmark results side-by-side.
+
+Shows throughput (TPS), latency, and cost deltas for matching models.
+Supports both single-run results and sweep data.
+
+Examples:
+  gpu-benchmark compare results-a100 results-h100
+  gpu-benchmark compare results-a100 results-h100 --format json
+  gpu-benchmark compare results-a100 results-h100 --crossover`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dirA, err := filepath.Abs(args[0])
+			if err != nil {
+				return err
+			}
+			dirB, err := filepath.Abs(args[1])
+			if err != nil {
+				return err
+			}
+
+			comparisons, err := report.CompareDirs(dirA, dirB)
+			if err != nil {
+				return err
+			}
+
+			switch format {
+			case "json":
+				return report.CompareJSON(comparisons)
+			case "table":
+				fallthrough
+			default:
+				report.PrintComparison(comparisons)
+			}
+
+			if crossover {
+				report.CrossoverAnalysis(comparisons)
+			}
+
+			if sla {
+				slaComps, err := report.CompareSLAGoodput(dirA, dirB)
+				if err != nil {
+					return err
+				}
+				printSLAComparison(slaComps)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, json")
+	cmd.Flags().BoolVar(&crossover, "crossover", false, "Show crossover analysis (where B overtakes A)")
+	cmd.Flags().BoolVar(&sla, "sla", false, "Include SLA-band goodput comparison")
+
+	return cmd
+}
+
+func printSLAComparison(comps map[string][]report.SLABandComparison) {
+	fmt.Println("  ══ SLA Goodput Comparison ══")
+	fmt.Println()
+
+	for model, bands := range comps {
+		fmt.Printf("  Model: %s\n", model)
+		fmt.Printf("    %-15s %-12s %-12s %-8s\n", "Band", "Goodput A", "Goodput B", "Winner")
+		fmt.Printf("    %s\n", "─────────────────────────────────────────")
+		for _, b := range bands {
+			fmt.Printf("    %-15s %-12.1f %-12.1f %-8s\n",
+				b.Band, b.GoodputA, b.GoodputB, b.Winner)
+		}
+		fmt.Println()
+	}
+}
+
+// ── quality ────────────────────────────────────────────────────────────────
+
+func qualityCmd() *cobra.Command {
+	cfg := &quality.GateConfig{}
+
+	cmd := &cobra.Command{
+		Use:   "quality",
+		Short: "Run quality gate evaluation (requires running inference server)",
+		Long: `Run quality gate evaluation against a running inference server.
+
+Uses lm-evaluation-harness to score model accuracy on standard benchmarks.
+Install with: pip install lm-eval
+
+This command assumes an inference server is already running on --host:--port.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+
+			if len(cfg.Tasks) == 0 {
+				cfg.Tasks = []string{"mmlu", "humaneval", "gsm8k"}
+			}
+
+			cfg.Thresholds = quality.DefaultQualityThreshold()
+
+			result, err := quality.RunGate(ctx, *cfg)
+			if err != nil {
+				return err
+			}
+
+			quality.PrintGateResult(result)
+
+			if !result.Passed {
+				return fmt.Errorf("quality gate failed")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&cfg.ModelID, "model-id", "", "Model ID to evaluate")
+	cmd.Flags().StringVar(&cfg.Host, "host", "localhost", "Inference server host")
+	cmd.Flags().IntVar(&cfg.Port, "port", 8000, "Inference server port")
+	cmd.Flags().StringVar(&cfg.OutputDir, "output-dir", "./results", "Directory to write quality gate results")
+	cmd.Flags().BoolVar(&cfg.SkipPrecision, "skip-precision", false, "Skip precision detection")
+
+	return cmd
+}
+
+// ── shared helpers ─────────────────────────────────────────────────────────
 
 func detectPlatform(ctx context.Context, name string) (platform.Platform, error) {
 	switch name {

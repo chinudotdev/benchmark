@@ -143,17 +143,33 @@ No HTTP frameworks, no ORM, no bloat. stdlib `net/http` for requests, `encoding/
 
 > Validate that faster tokens aren't worse tokens.
 
-**Deliverables:**
-- [ ] Quality gate interface
-- [ ] lm-evaluation-harness runner (subprocess, parse results)
-- [ ] Greedy-decode parity check (fixed prompts, token-level comparison)
-- [ ] Precision disclosure (query serving backend for actual compute dtype)
-- [ ] Quality pass/fail in result JSON
-- [ ] Multi-platform comparison command (`gpu-benchmark compare <dir1> <dir2> [dir3]`)
-- [ ] Side-by-side TPS, cost, latency comparison table
-- [ ] Crossover analysis: throughput-at-SLA across workload space
+**Status: ✅ DONE (no-hardware portion)**
 
-**Test:** Two result directories produce a comparison showing which platform wins at each SLA band.
+**Deliverables:**
+- [x] Quality gate interface (`internal/quality/gate.go`)
+- [x] lm-evaluation-harness runner (subprocess, parse JSON results)
+- [x] Precision disclosure (queries server + reads model config.json)
+- [x] Quality pass/fail in result JSON with configurable thresholds
+- [x] Multi-platform comparison command (`gpu-benchmark compare <dir1> <dir2>`)
+- [x] Side-by-side TPS, cost, latency comparison table
+- [x] Crossover analysis: throughput-at-SLA across workload space
+- [x] SLA-band goodput comparison (`--sla` flag)
+- [ ] Greedy-decode parity check (requires running server)
+- [ ] Full end-to-end test with real lm-eval (requires GPU hardware)
+
+**New files:**
+- `internal/quality/gate.go` + `gate_test.go` (6 tests)
+- `internal/report/compare.go` + `compare_test.go` (8 tests)
+
+**New CLI commands:**
+- `gpu-benchmark compare <dir1> <dir2> [--crossover] [--sla] [--format json]`
+- `gpu-benchmark quality --model-id <id> --port 8000`
+
+**Quality gate thresholds (defaults):**
+- MMLU ≥ 55%
+- HumanEval ≥ 35%
+- GSM8K ≥ 45%
+- Min 1 task must pass
 
 ---
 

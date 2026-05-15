@@ -55,6 +55,10 @@ type Options struct {
 	Repeat           int    // repeat each cell N times (default: 1)
 	TrafficProfile   string // "single-stream", "interactive", "high-concurrency", "offline-batch", or ""
 	VerifyTokens     bool   // verify prompt token counts via /tokenize
+
+	// Quality gate (Milestone 5)
+	QualityGate  bool   // run quality gate after benchmark
+	QualityTasks string // comma-separated task names for quality gate
 }
 
 // Run executes the full benchmark pipeline.
