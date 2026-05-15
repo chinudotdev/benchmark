@@ -20,6 +20,7 @@ import (
 	"github.com/chinudotdev/gpu-benchmark/internal/download"
 	"github.com/chinudotdev/gpu-benchmark/internal/platform"
 	"github.com/chinudotdev/gpu-benchmark/internal/report"
+	sysinfopkg "github.com/chinudotdev/gpu-benchmark/internal/sysinfo"
 	"github.com/chinudotdev/gpu-benchmark/internal/workload"
 )
 
@@ -118,7 +119,7 @@ func Run(opts Options) error {
 	}
 
 	// Write system info
-	sysInfo := collectSystemInfo(hw, plat, image)
+	sysInfo := collectSystemInfo(ctx, hw, plat, image)
 	if !opts.DryRun {
 		writeSystemInfo(opts.ResultsDir, sysInfo)
 	}
@@ -359,11 +360,18 @@ func detectPlatform(ctx context.Context, name string) (platform.Platform, error)
 	}
 }
 
-func collectSystemInfo(hw *platform.HardwareInfo, plat platform.Platform, image string) *report.SystemInfo {
+func collectSystemInfo(ctx context.Context, hw *platform.HardwareInfo, plat platform.Platform, image string) *report.SystemInfo {
+	si := sysinfopkg.Collect(ctx)
 	return &report.SystemInfo{
 		Platform:      plat.Name(),
 		Devices:       hw.Devices,
+		CPU:           report.CPUInfo{Model: si.CPU.Model, Cores: si.CPU.Cores},
+		RAM_GB:        si.RAM_GB,
+		OS:            si.OS,
+		Kernel:        si.Kernel,
+		DockerVersion: si.DockerVersion,
 		DockerImage:   image,
+		DiskAvailGB:   si.DiskAvailGB,
 		CollectedAt:   time.Now().Format(time.RFC3339),
 	}
 }

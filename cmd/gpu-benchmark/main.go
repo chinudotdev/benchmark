@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/chinudotdev/gpu-benchmark/internal/orchestrator"
+	"github.com/chinudotdev/gpu-benchmark/internal/platform"
 	"github.com/chinudotdev/gpu-benchmark/internal/report"
+	"github.com/chinudotdev/gpu-benchmark/internal/sysinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -137,21 +141,132 @@ func summarizeCmd() *cobra.Command {
 func sysinfoCmd() *cobra.Command {
 	var (
 		platformName string
+		dockerImage  string
 		jsonOutput   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "sysinfo",
-		Short: "Display current system configuration",
+		Short: "Display current system configuration (GPU, CPU, RAM, OS, Docker)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement standalone sysinfo using platform detection
-			fmt.Println("System info collection — use 'gpu-benchmark run --dry-run' for now")
+			ctx := context.Background()
+
+			// Collect OS-level info
+			si := sysinfo.Collect(ctx)
+
+			// Detect platform and collect GPU info
+			var hw *platform.HardwareInfo
+			plat, err := detectPlatform(ctx, platformName)
+			if err != nil {
+				fmt.Printf("  Warning: %v\n", err)
+			} else {
+				hw, err = plat.DetectHardware(ctx)
+				if err != nil {
+					fmt.Printf("  Warning: hardware detection failed: %v\n", err)
+				}
+			}
+
+			image := dockerImage
+			if image == "" {
+				image = "vllm/vllm-openai:latest"
+			}
+
+			if jsonOutput {
+				result := struct {
+					Platform string                `json:"platform"`
+					Devices  []platform.DeviceInfo `json:"devices"`
+					*sysinfo.Info
+				}{
+					Platform: platName(plat),
+					Devices:  deviceList(hw),
+					Info:     si,
+				}
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
+			} else {
+				printSysinfoPretty(si, hw, image)
+			}
+
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&platformName, "platform", "", "Platform: nvidia, amd, tenstorrent (auto-detect if empty)")
+	cmd.Flags().StringVar(&dockerImage, "docker-image", "", "Docker image to display (default: vllm/vllm-openai:latest)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON instead of pretty table")
 
 	return cmd
+}
+
+func detectPlatform(ctx context.Context, name string) (platform.Platform, error) {
+	switch name {
+	case "nvidia":
+		return platform.NewNVIDIAPlatform(), nil
+	case "amd":
+		return platform.NewAMDPlatform(), nil
+	case "tenstorrent":
+		return platform.NewTenstorrentPlatform(), nil
+	case "":
+		nvidia := platform.NewNVIDIAPlatform()
+		if _, err := nvidia.DetectHardware(ctx); err == nil {
+			return nvidia, nil
+		}
+		amd := platform.NewAMDPlatform()
+		if _, err := amd.DetectHardware(ctx); err == nil {
+			return amd, nil
+		}
+		tt := platform.NewTenstorrentPlatform()
+		if _, err := tt.DetectHardware(ctx); err == nil {
+			return tt, nil
+		}
+		return nil, fmt.Errorf("no supported accelerators detected")
+	default:
+		return nil, fmt.Errorf("unknown platform: %s", name)
+	}
+}
+
+func platName(p platform.Platform) string {
+	if p == nil {
+		return "none"
+	}
+	return p.Name()
+}
+
+func deviceList(hw *platform.HardwareInfo) []platform.DeviceInfo {
+	if hw == nil {
+		return nil
+	}
+	return hw.Devices
+}
+
+func printSysinfoPretty(si *sysinfo.Info, hw *platform.HardwareInfo, dockerImage string) {
+	bold := "\033[1m"
+	reset := "\033[0m"
+
+	fmt.Println()
+	fmt.Printf("  ══ System Configuration ══\n\n")
+
+	if hw != nil && len(hw.Devices) > 0 {
+		for _, dev := range hw.Devices {
+			fmt.Printf("  %sGPU:%s      %s (%dGB VRAM)\n", bold, reset, dev.Name, dev.VRAM_GB)
+			fmt.Printf("             Driver %s | %s %s\n", dev.DriverVersion, runtimeLabel(hw.Platform), dev.RuntimeVersion)
+		}
+	} else {
+		fmt.Printf("  %sGPU:%s      No accelerators detected\n", bold, reset)
+	}
+
+	sysinfo.PrintPretty(si, dockerImage)
+}
+
+func runtimeLabel(platform string) string {
+	switch platform {
+	case "nvidia":
+		return "CUDA"
+	case "amd":
+		return "ROCm"
+	case "tenstorrent":
+		return "TT-Metal"
+	default:
+		return "Runtime"
+	}
 }
