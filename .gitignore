@@ -1,5 +1,19 @@
+# Build artifacts
+/gpu-benchmark
+/dist/
+/results/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Node (legacy)
 node_modules/
-results/
-dist/
-gpu-benchmark
+
+# OS
 .DS_Store
