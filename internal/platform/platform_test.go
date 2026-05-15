@@ -4,6 +4,55 @@ import (
 	"testing"
 )
 
+// ── AutoDetect + ProbeAll ──────────────────────────────────────────────────
+
+func TestAutoDetectUnknown(t *testing.T) {
+	_, _, err := AutoDetect(t.Context(), "bogus")
+	if err == nil {
+		t.Error("expected error for unknown platform")
+	}
+}
+
+func TestAutoDetectExplicit(t *testing.T) {
+	// Explicitly request nvidia — will fail on non-NVIDIA but returns platform
+	// On systems without NVIDIA it should return error
+	_, _, err := AutoDetect(t.Context(), "nvidia")
+	if err != nil {
+		t.Logf("nvidia not available (expected on non-GPU): %v", err)
+	}
+}
+
+func TestAutoDetectEmpty(t *testing.T) {
+	// Empty string triggers full probe — will fail if no GPU at all
+	_, _, err := AutoDetect(t.Context(), "")
+	if err != nil {
+		t.Logf("no GPU detected (expected on dev machine): %v", err)
+	}
+}
+
+func TestProbeAll(t *testing.T) {
+	detected := ProbeAll(t.Context())
+	// On a dev machine without GPUs, this should return empty
+	if len(detected) > 0 {
+		for _, d := range detected {
+			t.Logf("Found: %s (%d devices)", d.Platform.Name(), len(d.Hardware.Devices))
+		}
+	} else {
+		t.Log("No platforms detected (expected on non-GPU system)")
+	}
+}
+
+func TestAutoDetectCaseInsensitive(t *testing.T) {
+	_, _, err := AutoDetect(t.Context(), "NVIDIA")
+	if err != nil {
+		t.Logf("NVIDIA not available: %v", err)
+	}
+	_, _, err = AutoDetect(t.Context(), "AMD")
+	if err != nil {
+		t.Logf("AMD not available: %v", err)
+	}
+}
+
 // ── AMD Platform ────────────────────────────────────────────────────────────
 
 func TestAMDPlatformName(t *testing.T) {

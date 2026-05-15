@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/chinudotdev/gpu-benchmark/internal/config"
 	"github.com/chinudotdev/gpu-benchmark/internal/orchestrator"
@@ -51,6 +52,9 @@ func runCmd() *cobra.Command {
 		Short: "Run GPU benchmarks against one or all models",
 		Long: `Run GPU inference benchmarks against an OpenAI-compatible endpoint.
 
+Auto-detects hardware platform (NVIDIA, AMD, or Tenstorrent).
+Use --platform to override auto-detection.
+
 Loads configuration from .gpu-benchmark.yaml if found (searches cwd → parent dirs → $HOME).
 CLI flags always override config file values.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -79,7 +83,7 @@ CLI flags always override config file values.`,
 	cmd.Flags().IntVar(&opts.WarmupReqs, "warmup", 5, "Number of warmup requests to discard")
 
 	// Platform
-	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Platform: nvidia, amd, tenstorrent (auto-detect if empty)")
+	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Override auto-detected platform (nvidia, amd, tenstorrent)")
 
 	// Model config
 	cmd.Flags().StringVar(&opts.ModelsYAML, "models-yaml", "./models.yaml", "Path to models.yaml registry")
@@ -264,56 +268,43 @@ func summarizeCmd() *cobra.Command {
 
 func sysinfoCmd() *cobra.Command {
 	var (
-		platformName string
-		dockerImage  string
-		jsonOutput   bool
+		jsonOutput  bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "sysinfo",
 		Short: "Display current system configuration (GPU, CPU, RAM, OS, Docker)",
+		Long: `Display system configuration including all detected accelerators.
+
+Auto-detects all platforms (NVIDIA, AMD, Tenstorrent) simultaneously.
+Shows every GPU found regardless of vendor.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			si := sysinfo.Collect(ctx)
 
-			var hw *platform.HardwareInfo
-			plat, err := detectPlatform(ctx, platformName)
-			if err != nil {
-				fmt.Printf("  Warning: %v\n", err)
-			} else {
-				hw, err = plat.DetectHardware(ctx)
-				if err != nil {
-					fmt.Printf("  Warning: hardware detection failed: %v\n", err)
-				}
-			}
+			// Probe ALL platforms simultaneously
+			allDetected := platform.ProbeAll(ctx)
 
-			image := dockerImage
-			if image == "" {
-				image = "vllm/vllm-openai:latest"
-			}
+			image := "vllm/vllm-openai:latest"
 
 			if jsonOutput {
 				result := struct {
-					Platform string                `json:"platform"`
-					Devices  []platform.DeviceInfo `json:"devices"`
+					Platforms []platform.DetectedPlatform `json:"platforms"`
 					*sysinfo.Info
 				}{
-					Platform: platName(plat),
-					Devices:  deviceList(hw),
-					Info:     si,
+					Platforms: allDetected,
+					Info:      si,
 				}
 				data, _ := json.MarshalIndent(result, "", "  ")
 				fmt.Println(string(data))
 			} else {
-				printSysinfoPretty(si, hw, image)
+				printSysinfoPretty(si, allDetected, image)
 			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&platformName, "platform", "", "Platform: nvidia, amd, tenstorrent (auto-detect if empty)")
-	cmd.Flags().StringVar(&dockerImage, "docker-image", "", "Docker image to display (default: vllm/vllm-openai:latest)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON instead of pretty table")
 
 	return cmd
@@ -561,68 +552,47 @@ This command assumes an inference server is already running on --host:--port.`,
 
 // ── shared helpers ─────────────────────────────────────────────────────────
 
-func detectPlatform(ctx context.Context, name string) (platform.Platform, error) {
-	switch name {
-	case "nvidia":
-		return platform.NewNVIDIAPlatform(), nil
-	case "amd":
-		return platform.NewAMDPlatform(), nil
-	case "tenstorrent":
-		return platform.NewTenstorrentPlatform(), nil
-	case "":
-		nvidia := platform.NewNVIDIAPlatform()
-		if _, err := nvidia.DetectHardware(ctx); err == nil {
-			return nvidia, nil
-		}
-		amd := platform.NewAMDPlatform()
-		if _, err := amd.DetectHardware(ctx); err == nil {
-			return amd, nil
-		}
-		tt := platform.NewTenstorrentPlatform()
-		if _, err := tt.DetectHardware(ctx); err == nil {
-			return tt, nil
-		}
-		return nil, fmt.Errorf("no supported accelerators detected")
-	default:
-		return nil, fmt.Errorf("unknown platform: %s", name)
+func allDevices(detected []platform.DetectedPlatform) []platform.DeviceInfo {
+	var devices []platform.DeviceInfo
+	for _, d := range detected {
+		devices = append(devices, d.Hardware.Devices...)
 	}
+	return devices
 }
 
-func platName(p platform.Platform) string {
-	if p == nil {
-		return "none"
-	}
-	return p.Name()
-}
-
-func deviceList(hw *platform.HardwareInfo) []platform.DeviceInfo {
-	if hw == nil {
-		return nil
-	}
-	return hw.Devices
-}
-
-func printSysinfoPretty(si *sysinfo.Info, hw *platform.HardwareInfo, dockerImage string) {
+func printSysinfoPretty(si *sysinfo.Info, detected []platform.DetectedPlatform, dockerImage string) {
 	bold := "\033[1m"
 	reset := "\033[0m"
 
 	fmt.Println()
 	fmt.Printf("  ══ System Configuration ══\n\n")
 
-	if hw != nil && len(hw.Devices) > 0 {
-		for _, dev := range hw.Devices {
-			fmt.Printf("  %sGPU:%s      %s (%dGB VRAM)\n", bold, reset, dev.Name, dev.VRAM_GB)
-			fmt.Printf("             Driver %s | %s %s\n", dev.DriverVersion, runtimeLabel(hw.Platform), dev.RuntimeVersion)
+	if len(detected) > 0 {
+		for _, dp := range detected {
+			rtLabel := runtimeLabel(dp.Platform.Name())
+			for _, dev := range dp.Hardware.Devices {
+				fmt.Printf("  %sGPU:%s      %s (%dGB VRAM)\n", bold, reset, dev.Name, dev.VRAM_GB)
+				fmt.Printf("             Driver %s | %s %s\n", dev.DriverVersion, rtLabel, dev.RuntimeVersion)
+			}
 		}
 	} else {
 		fmt.Printf("  %sGPU:%s      No accelerators detected\n", bold, reset)
 	}
 
+	if len(detected) > 1 {
+		names := make([]string, len(detected))
+		for i, d := range detected {
+			names[i] = d.Platform.Name()
+		}
+		fmt.Printf("  %sNote:%s      Multiple platforms detected: %s\n", bold, reset, strings.Join(names, ", "))
+		fmt.Printf("             Use --platform to select one for benchmarking\n")
+	}
+
 	sysinfo.PrintPretty(si, dockerImage)
 }
 
-func runtimeLabel(platform string) string {
-	switch platform {
+func runtimeLabel(plat string) string {
+	switch plat {
 	case "nvidia":
 		return "CUDA"
 	case "amd":

@@ -3,7 +3,12 @@
 // implements this interface so the benchmark runner is hardware-agnostic.
 package platform
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+)
 
 // Platform is the contract each hardware backend must implement.
 type Platform interface {
@@ -28,6 +33,136 @@ type Platform interface {
 
 	// HealthEndpoint returns the relative URL path to probe for readiness.
 	HealthEndpoint() string
+}
+
+// DetectionResult holds the outcome of auto-detecting all platforms.
+type DetectionResult struct {
+	Platforms []DetectedPlatform `json:"platforms"`
+}
+
+// DetectedPlatform is a single platform that was found on the system.
+type DetectedPlatform struct {
+	Platform Platform      `json:"-"`
+	Hardware *HardwareInfo `json:"hardware"`
+}
+
+// AutoDetect probes all known platforms and returns results for every
+// platform that has hardware present. If name is non-empty, it selects
+// that specific platform instead of probing.
+//
+// When multiple platforms are found and name is "", AutoDetect picks
+// the first one but logs a message telling the user to use --platform
+// to disambiguate.
+func AutoDetect(ctx context.Context, name string) (Platform, *HardwareInfo, error) {
+	if name != "" {
+		return selectPlatform(ctx, name)
+	}
+	return autoDetectAll(ctx)
+}
+
+// selectPlatform returns the named platform without probing others.
+func selectPlatform(ctx context.Context, name string) (Platform, *HardwareInfo, error) {
+	var plat Platform
+	switch strings.ToLower(name) {
+	case "nvidia":
+		plat = NewNVIDIAPlatform()
+	case "amd":
+		plat = NewAMDPlatform()
+	case "tenstorrent":
+		plat = NewTenstorrentPlatform()
+	default:
+		return nil, nil, fmt.Errorf("unknown platform: %s (use nvidia, amd, or tenstorrent)", name)
+	}
+
+	hw, err := plat.DetectHardware(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s hardware not detected: %w", plat.Name(), err)
+	}
+	log.Printf("Using %s platform (%d device(s))", plat.Name(), len(hw.Devices))
+	return plat, hw, nil
+}
+
+// autoDetectAll probes all platforms and returns the best match.
+// Priority: nvidia > amd > tenstorrent (most common first).
+// If multiple platforms are found, logs a warning.
+func autoDetectAll(ctx context.Context) (Platform, *HardwareInfo, error) {
+	candidates := []struct {
+		name string
+		new  func() Platform
+	}{
+		{"nvidia", func() Platform { return NewNVIDIAPlatform() }},
+		{"amd", func() Platform { return NewAMDPlatform() }},
+		{"tenstorrent", func() Platform { return NewTenstorrentPlatform() }},
+	}
+
+	var detected []DetectedPlatform
+
+	for _, c := range candidates {
+		p := c.new()
+		hw, err := p.DetectHardware(ctx)
+		if err != nil {
+			continue
+		}
+		detected = append(detected, DetectedPlatform{
+			Platform: p,
+			Hardware: hw,
+		})
+	}
+
+	if len(detected) == 0 {
+		return nil, nil, fmt.Errorf("no supported accelerators detected (tried NVIDIA, AMD, Tenstorrent)")
+	}
+
+	if len(detected) > 1 {
+		names := make([]string, len(detected))
+		for i, d := range detected {
+			names[i] = d.Platform.Name()
+		}
+		log.Printf("⚠ Multiple platforms detected: %s — using %s. Use --platform to override.",
+			strings.Join(names, ", "), detected[0].Platform.Name())
+	}
+
+	choice := detected[0]
+	hw := choice.Hardware
+
+	// Count total devices across all detected platforms for reporting
+	totalDevices := 0
+	for _, d := range detected {
+		totalDevices += len(d.Hardware.Devices)
+	}
+
+	log.Printf("Auto-detected: %s platform (%d device(s))", choice.Platform.Name(), len(hw.Devices))
+
+	// If there's only one platform (the common case), also enrich the
+	// result by setting the hardware reference for the chosen platform.
+	return choice.Platform, hw, nil
+}
+
+// ProbeAll probes every platform and returns all that were found.
+// Used by sysinfo to display all available hardware.
+func ProbeAll(ctx context.Context) []DetectedPlatform {
+	candidates := []struct {
+		name string
+		new  func() Platform
+	}{
+		{"nvidia", func() Platform { return NewNVIDIAPlatform() }},
+		{"amd", func() Platform { return NewAMDPlatform() }},
+		{"tenstorrent", func() Platform { return NewTenstorrentPlatform() }},
+	}
+
+	var detected []DetectedPlatform
+	for _, c := range candidates {
+		p := c.new()
+		hw, err := p.DetectHardware(ctx)
+		if err != nil {
+			continue
+		}
+		detected = append(detected, DetectedPlatform{
+			Platform: p,
+			Hardware: hw,
+		})
+	}
+	return detected
 }
 
 // HardwareInfo describes detected accelerators.

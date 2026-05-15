@@ -66,19 +66,13 @@ func Run(opts Options) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Detect platform
-	plat, err := detectPlatform(ctx, opts.Platform)
+	// Auto-detect platform + hardware in one call
+	plat, hw, err := platform.AutoDetect(ctx, opts.Platform)
 	if err != nil {
 		return fmt.Errorf("platform detection: %w", err)
 	}
 
 	log.Printf("Platform: %s", plat.Name())
-
-	// Detect hardware
-	hw, err := plat.DetectHardware(ctx)
-	if err != nil {
-		return fmt.Errorf("hardware detection: %w", err)
-	}
 
 	for _, dev := range hw.Devices {
 		log.Printf("  GPU: %s (%dGB VRAM, driver=%s)", dev.Name, dev.VRAM_GB, dev.DriverVersion)
@@ -576,33 +570,11 @@ func seqProfileName(profiles []benchmark.SeqProfileEntry, inLen, outLen int) str
 	return fmt.Sprintf("in%d-out%d", inLen, outLen)
 }
 
-// detectPlatform auto-detects or selects the platform.
+// detectPlatform is removed — use platform.AutoDetect() instead.
+// Kept as stub for any external callers.
 func detectPlatform(ctx context.Context, name string) (platform.Platform, error) {
-	switch strings.ToLower(name) {
-	case "nvidia":
-		return platform.NewNVIDIAPlatform(), nil
-	case "amd":
-		return platform.NewAMDPlatform(), nil
-	case "tenstorrent":
-		return platform.NewTenstorrentPlatform(), nil
-	case "":
-		// Auto-detect: try each platform
-		nvidia := platform.NewNVIDIAPlatform()
-		if _, err := nvidia.DetectHardware(ctx); err == nil {
-			return nvidia, nil
-		}
-		amd := platform.NewAMDPlatform()
-		if _, err := amd.DetectHardware(ctx); err == nil {
-			return amd, nil
-		}
-		tt := platform.NewTenstorrentPlatform()
-		if _, err := tt.DetectHardware(ctx); err == nil {
-			return tt, nil
-		}
-		return nil, fmt.Errorf("no supported accelerators detected (tried NVIDIA, AMD, Tenstorrent)")
-	default:
-		return nil, fmt.Errorf("unknown platform: %s (use nvidia, amd, or tenstorrent)", name)
-	}
+	plat, _, err := platform.AutoDetect(ctx, name)
+	return plat, err
 }
 
 func collectSystemInfo(ctx context.Context, hw *platform.HardwareInfo, plat platform.Platform, image string) *report.SystemInfo {
