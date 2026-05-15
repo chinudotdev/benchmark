@@ -3,6 +3,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,11 +300,13 @@ func aggregateCellsForMD(cells []*SweepCellResult) *mdSweepSummary {
 			cell.TTFTP99MeanMs = a.ttftSumMs / float64(a.valid)
 			cell.TPOTP99MeanMs = a.tpotSumMs / float64(a.valid)
 			if a.valid > 1 {
-				variance := (a.tpsSqSum / float64(a.valid)) - (cell.TPSMean * cell.TPSMean)
-				if variance < 0 {
-					variance = 0
+				// Use sample variance (divide by n-1) to match AggregateSweep in sweep.go
+				popVariance := (a.tpsSqSum / float64(a.valid)) - (cell.TPSMean * cell.TPSMean)
+				if popVariance < 0 {
+					popVariance = 0
 				}
-				cell.TPSStddev = sqrt(variance)
+				sampleVariance := popVariance * float64(a.valid) / float64(a.valid-1)
+				cell.TPSStddev = math.Sqrt(sampleVariance)
 			}
 		}
 		sw.Cells = append(sw.Cells, cell)
@@ -323,15 +326,4 @@ func loadSystemInfoFile(dir string) (*SystemInfo, error) {
 		return nil, err
 	}
 	return &si, nil
-}
-
-func sqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 20; i++ {
-		z = (z + x/z) / 2
-	}
-	return z
 }

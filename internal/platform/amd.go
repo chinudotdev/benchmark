@@ -540,8 +540,8 @@ func (p *AMDPlatform) ContainerConfig(model ModelConfig, opts RunOptions) *Conta
 		"--tensor-parallel-size", strconv.Itoa(model.TP),
 		"--max-model-len", strconv.Itoa(opts.MaxModelLen),
 		"--gpu-memory-utilization", "0.90",
-		"--port", "8000",
-		"--device", "cpu", // vLLM ROCm needs this hint for AMD
+		"--port", strconv.Itoa(opts.Port),
+		"--device", "rocm", // vLLM ROCm uses --device rocm
 	}
 	extraArgs = append(extraArgs, quantFlags(model.Quant)...)
 	if model.ExtraFlags != "" {

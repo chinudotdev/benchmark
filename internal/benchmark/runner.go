@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -447,12 +448,12 @@ func probeStreamOptions(ctx context.Context, url, model string) bool {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 400 {
+	if resp.StatusCode != 200 {
+		// Drain the body
+		io.ReadAll(resp.Body)
 		return false
 	}
 
-	// Drain the body
-	io.ReadAll(resp.Body)
 	return true
 }
 
@@ -466,7 +467,7 @@ func generatePrompts(count, targetTokens int) []string {
 		"embedding", "weight",
 	}
 
-	rng := newRNG(42)
+	rng := rand.New(rand.NewSource(42))
 	prompts := make([]string, count)
 	for i := 0; i < count; i++ {
 		targetChars := targetTokens * 4
@@ -496,16 +497,6 @@ func joinWords(w []string) string {
 		buf.WriteString(s)
 	}
 	return buf.String()
-}
-
-// rng is a simple seeded PRNG (LCG) for deterministic prompt generation.
-type rng struct{ state uint32 }
-
-func newRNG(seed uint32) *rng { return &rng{state: seed} }
-
-func (r *rng) Intn(n int) int {
-	r.state = r.state*1664525 + 1013904223
-	return int((r.state >> 1) % uint32(n))
 }
 
 // parseRetryAfter parses the HTTP Retry-After header value.

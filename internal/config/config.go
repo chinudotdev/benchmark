@@ -126,23 +126,6 @@ func searchPaths() []string {
 	return paths
 }
 
-// Merge applies config file values onto the provided options struct.
-// Config file values only override CLI flags that weren't explicitly set.
-// This uses the "config as defaults" pattern — CLI flags always win.
-func Merge(cfg *Config, apply func(name string, fn func())) {
-	if cfg == nil {
-		return
-	}
-
-	// Each apply call checks if the flag was explicitly set by the CLI.
-	// If not, the config value is used.
-	// The caller passes a function that sets the value only if the flag
-	// wasn't changed from its default.
-
-	// This is a simplified merge — the orchestrator reads the Config
-	// directly for unset fields.
-}
-
 // ExampleConfig returns an example config file content.
 func ExampleConfig() string {
 	return `# gpu-benchmark configuration

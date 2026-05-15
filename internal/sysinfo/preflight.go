@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -245,6 +246,5 @@ func parseSizeToGB(s string) int {
 }
 
 func isLinux() bool {
-	return strings.HasPrefix(os.Getenv("OS"), "Linux") ||
-		strings.Contains(strings.ToLower(os.Getenv("OSTYPE")), "linux")
+	return runtime.GOOS == "linux"
 }

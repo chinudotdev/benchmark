@@ -99,16 +99,16 @@ func ExportBundle(resultsDir string, output string) (string, error) {
 		}
 
 		// Write file content
-		f, err := os.Open(path)
+		src, err := os.Open(path)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
 
-		if _, err := io.Copy(tw, f); err != nil {
+		if _, err := io.Copy(tw, src); err != nil {
+			src.Close()
 			return fmt.Errorf("write %s: %w", relPath, err)
 		}
-		f.Close()
+		src.Close()
 
 		includedFiles = append(includedFiles, relPath)
 		return nil

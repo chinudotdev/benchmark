@@ -212,11 +212,19 @@ func benchmarkModel(
 	fmt.Println()
 	printHeader(fmt.Sprintf("Benchmarking: %s", model.Name))
 
-	// VRAM check
+	// VRAM check — use the smallest GPU for the check since tensor parallelism
+	// splits the model across devices, and the smallest GPU is the bottleneck.
 	if len(hw.Devices) > 0 {
-		firstGPU := hw.Devices[0]
-		if model.MinVRAM_GB > 0 && firstGPU.VRAM_GB < model.MinVRAM_GB && !opts.DryRun {
-			log.Printf("Skipping %s — requires %dGB, GPU has %dGB", model.Name, model.MinVRAM_GB, firstGPU.VRAM_GB)
+		minVRAM := hw.Devices[0].VRAM_GB
+		for _, dev := range hw.Devices[1:] {
+			if dev.VRAM_GB < minVRAM {
+				minVRAM = dev.VRAM_GB
+			}
+		}
+		availableVRAM := minVRAM * len(hw.Devices)
+		if model.MinVRAM_GB > 0 && availableVRAM < model.MinVRAM_GB && !opts.DryRun {
+			log.Printf("Skipping %s — requires %dGB total, available %dGB (%d GPUs × %dGB min)",
+				model.Name, model.MinVRAM_GB, availableVRAM, len(hw.Devices), minVRAM)
 			return nil
 		}
 	}
@@ -391,11 +399,19 @@ func benchmarkModelSweep(
 	fmt.Println()
 	printHeader(fmt.Sprintf("Sweep Benchmarking: %s", model.Name))
 
-	// VRAM check
+	// VRAM check — use the smallest GPU for the check since tensor parallelism
+	// splits the model across devices, and the smallest GPU is the bottleneck.
 	if len(hw.Devices) > 0 {
-		firstGPU := hw.Devices[0]
-		if model.MinVRAM_GB > 0 && firstGPU.VRAM_GB < model.MinVRAM_GB && !opts.DryRun {
-			log.Printf("Skipping %s — requires %dGB, GPU has %dGB", model.Name, model.MinVRAM_GB, firstGPU.VRAM_GB)
+		minVRAM := hw.Devices[0].VRAM_GB
+		for _, dev := range hw.Devices[1:] {
+			if dev.VRAM_GB < minVRAM {
+				minVRAM = dev.VRAM_GB
+			}
+		}
+		availableVRAM := minVRAM * len(hw.Devices)
+		if model.MinVRAM_GB > 0 && availableVRAM < model.MinVRAM_GB && !opts.DryRun {
+			log.Printf("Skipping %s — requires %dGB total, available %dGB (%d GPUs × %dGB min)",
+				model.Name, model.MinVRAM_GB, availableVRAM, len(hw.Devices), minVRAM)
 			return nil
 		}
 	}
@@ -599,13 +615,6 @@ func seqProfileName(profiles []benchmark.SeqProfileEntry, inLen, outLen int) str
 	return fmt.Sprintf("in%d-out%d", inLen, outLen)
 }
 
-// detectPlatform is removed — use platform.AutoDetect() instead.
-// Kept as stub for any external callers.
-func detectPlatform(ctx context.Context, name string) (platform.Platform, error) {
-	plat, _, err := platform.AutoDetect(ctx, name)
-	return plat, err
-}
-
 func collectSystemInfo(ctx context.Context, hw *platform.HardwareInfo, plat platform.Platform, image string) *report.SystemInfo {
 	si := sysinfopkg.Collect(ctx)
 	return &report.SystemInfo{
@@ -624,9 +633,15 @@ func collectSystemInfo(ctx context.Context, hw *platform.HardwareInfo, plat plat
 
 func writeSystemInfo(dir string, info *report.SystemInfo) {
 	path := filepath.Join(dir, "system_info.json")
-	data, _ := json.MarshalIndent(info, "", "  ")
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		log.Printf("Warning: failed to marshal system info: %v", err)
+		return
+	}
 	data = append(data, '\n')
-	os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Printf("Warning: failed to write system info: %v", err)
+	}
 }
 
 func safeName(name string) string {

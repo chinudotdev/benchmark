@@ -281,6 +281,7 @@ gpu-benchmark/
 └── README.md
 ```
 
-## Current focus: Milestone 4 (AMD + Tenstorrent backends)
+## Current focus: Hardware validation on real AMD MI300X and Tenstorrent Wormhole
 
-We scaffold the project structure, implement the `Platform` interface, get the NVIDIA path working end-to-end with Docker orchestration, load generation, metric collection, and result persistence.
+All 6 milestones are code-complete. Remaining work is validating on real hardware.
+See `bugs.md` for known issues to address before hardware testing.

@@ -156,7 +156,7 @@ func mergeConfig(cmd *cobra.Command, opts *orchestrator.Options) {
 	flags := cmd.Flags()
 
 	mergeString := func(name string, target *string) {
-		if !flags.Changed(name) && cfgField(name, cfg) != "" {
+		if !flags.Changed(name) && cfgFieldString(name, cfg) != "" {
 			*target = cfgFieldString(name, cfg)
 		}
 	}
@@ -234,9 +234,6 @@ func cfgFieldString(name string, cfg *config.Config) string {
 		return ""
 	}
 }
-
-// cfgField is unused but kept for interface compat.
-func cfgField(name string, cfg *config.Config) string { return cfgFieldString(name, cfg) }
 
 // ── summarize ──────────────────────────────────────────────────────────────
 
@@ -551,14 +548,6 @@ This command assumes an inference server is already running on --host:--port.`,
 }
 
 // ── shared helpers ─────────────────────────────────────────────────────────
-
-func allDevices(detected []platform.DetectedPlatform) []platform.DeviceInfo {
-	var devices []platform.DeviceInfo
-	for _, d := range detected {
-		devices = append(devices, d.Hardware.Devices...)
-	}
-	return devices
-}
 
 func printSysinfoPretty(si *sysinfo.Info, detected []platform.DetectedPlatform, dockerImage string) {
 	bold := "\033[1m"

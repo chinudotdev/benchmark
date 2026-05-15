@@ -114,19 +114,21 @@ func RunGate(ctx context.Context, cfg GateConfig) (*GateResult, error) {
 	}
 
 	for _, task := range tasks {
-		taskCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		defer cancel()
+		func() {
+			taskCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+			defer cancel()
 
-		evalResult, err := runTask(taskCtx, task, cfg)
-		if err != nil {
-			log.Printf("Warning: task %s failed: %v", task, err)
-			result.Results = append(result.Results, EvalResult{
-				Task:  task,
-				Error: err.Error(),
-			})
-			continue
-		}
-		result.Results = append(result.Results, *evalResult)
+			evalResult, err := runTask(taskCtx, task, cfg)
+			if err != nil {
+				log.Printf("Warning: task %s failed: %v", task, err)
+				result.Results = append(result.Results, EvalResult{
+					Task:  task,
+					Error: err.Error(),
+				})
+				return
+			}
+			result.Results = append(result.Results, *evalResult)
+		}()
 	}
 
 	// Step 3: Determine pass/fail
@@ -458,7 +460,10 @@ func writeGateResult(dir string, result *GateResult) error {
 		return err
 	}
 	path := filepath.Join(dir, "quality_gate.json")
-	data, _ := json.MarshalIndent(result, "", "  ")
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal gate result: %w", err)
+	}
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0o644)
 }
