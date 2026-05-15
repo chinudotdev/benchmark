@@ -148,14 +148,15 @@ func (p *NVIDIAPlatform) HealthEndpoint() string {
 	return "/health"
 }
 
-// parseVRAM parses VRAM strings like "81920 MiB" into GB.
+// parseVRAM parses VRAM strings like "81920 MiB" into GB, rounded to
+// the nearest integer to avoid truncation (e.g. 48589 MiB → 47 GB, 48576 MiB → 48 GB).
 func parseVRAM(s string) int {
 	re := regexp.MustCompile(`(\d+)\s*MiB`)
 	m := re.FindStringSubmatch(s)
 	if len(m) > 1 {
 		mib, err := strconv.Atoi(m[1])
 		if err == nil {
-			return mib / 1024
+			return int(float64(mib)/1024 + 0.5) // round to nearest GB
 		}
 	}
 	return 0

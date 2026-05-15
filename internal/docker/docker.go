@@ -123,14 +123,14 @@ func (m *Manager) WaitHealthy(ctx context.Context, port int, maxWait time.Durati
 	containerName := fmt.Sprintf("vllm_bench_%d", port)
 	url := fmt.Sprintf("http://localhost:%d/health", port)
 	interval := 5 * time.Second
-	elapsed := time.Duration(0)
+	start := time.Now()
 
 	log.Printf("Waiting for server (max %v)...", maxWait)
 
-	for elapsed < maxWait {
+	for time.Since(start) < maxWait {
 		select {
 		case <-ctx.Done():
-			return elapsed, ctx.Err()
+			return time.Since(start), ctx.Err()
 		default:
 		}
 
@@ -139,7 +139,7 @@ func (m *Manager) WaitHealthy(ctx context.Context, port int, maxWait time.Durati
 		if status == "exited" {
 			m.dumpLogs(containerName)
 			m.Stop(containerName)
-			return elapsed, fmt.Errorf("container exited unexpectedly")
+			return time.Since(start), fmt.Errorf("container exited unexpectedly")
 		}
 
 		// Health check
@@ -151,17 +151,17 @@ func (m *Manager) WaitHealthy(ctx context.Context, port int, maxWait time.Durati
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
+				elapsed := time.Since(start)
 				log.Printf("Server ready! (%v)", elapsed.Round(time.Second))
 				return elapsed, nil
 			}
 		}
 
-		log.Printf("  Not ready yet (%v) — retrying in %v...", elapsed.Round(time.Second), interval)
+		log.Printf("  Not ready yet (%v) — retrying in %v...", time.Since(start).Round(time.Second), interval)
 		time.Sleep(interval)
-		elapsed += interval
 	}
 
-	return elapsed, fmt.Errorf("server did not become ready within %v", maxWait)
+	return time.Since(start), fmt.Errorf("server did not become ready within %v", maxWait)
 }
 
 // dumpLogs prints container logs to stderr.

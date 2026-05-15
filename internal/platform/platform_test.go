@@ -15,7 +15,9 @@ func TestParseVRAM(t *testing.T) {
 		{"0 MiB", 0},
 		{"unknown", 0},
 		{"", 0},
-		{"48589 MiB", 47},
+		{"48589 MiB", 47},  // 48589/1024 = 47.45, rounds to 47
+		{"49152 MiB", 48},  // 49152/1024 = 48.00, exact
+		{"49600 MiB", 48},  // 49600/1024 = 48.44, rounds to 48
 	}
 
 	for _, tt := range tests {

@@ -22,12 +22,13 @@ func Run(ctx context.Context, cfg RunnerConfig) (*Metrics, error) {
 	// Generate prompts
 	prompts := generatePrompts(cfg.NumPrompts, cfg.InputLen)
 
-	// Warmup phase
+	// Warmup phase — use separate prompts so server cache isn't pre-warmed
+	// with the exact benchmark prompts.
 	if cfg.WarmupReqs > 0 {
+		warmupPrompts := generatePrompts(cfg.WarmupReqs, cfg.InputLen)
 		log.Printf("  Warming up (%d requests)...", cfg.WarmupReqs)
 		for i := 0; i < cfg.WarmupReqs; i++ {
-			prompt := prompts[i%len(prompts)]
-			sendRequest(ctx, url, cfg, prompt, 1)
+			sendRequest(ctx, url, cfg, warmupPrompts[i], 1, true)
 		}
 		log.Printf("  Warmup complete.")
 	}
@@ -53,10 +54,11 @@ func Run(ctx context.Context, cfg RunnerConfig) (*Metrics, error) {
 		wg        sync.WaitGroup
 	)
 
+	loop:
 	for i, prompt := range prompts {
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		default:
 		}
 
@@ -67,10 +69,7 @@ func Run(ctx context.Context, cfg RunnerConfig) (*Metrics, error) {
 			defer wg.Done()
 			defer func() { <-sem }() // release
 
-			result := sendRequest(ctx, url, cfg, p, cfg.Retries)
-			if useStreamOpts || !cfg.Stream {
-				// nothing to adjust
-			}
+			result := sendRequest(ctx, url, cfg, p, cfg.Retries, useStreamOpts)
 
 			resultsMu.Lock()
 			results = append(results, result)
@@ -92,7 +91,7 @@ func Run(ctx context.Context, cfg RunnerConfig) (*Metrics, error) {
 }
 
 // sendRequest sends a single benchmark request with retries.
-func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt string, retries int) RequestResult {
+func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt string, retries int, useStreamOpts bool) RequestResult {
 	payload := map[string]any{
 		"model":       cfg.Model,
 		"messages":    []map[string]string{{"role": "user", "content": prompt}},
@@ -100,7 +99,7 @@ func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt strin
 		"temperature": 1.0,
 		"stream":      cfg.Stream,
 	}
-	if cfg.Stream {
+	if cfg.Stream && useStreamOpts {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
 
@@ -120,7 +119,7 @@ func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt strin
 	if err != nil {
 		if retries > 0 {
 			time.Sleep(2 * time.Second)
-			return sendRequest(ctx, url, cfg, prompt, retries-1)
+			return sendRequest(ctx, url, cfg, prompt, retries-1, useStreamOpts)
 		}
 		return RequestResult{Error: err.Error(), E2ELatency: time.Since(start)}
 	}
@@ -129,12 +128,13 @@ func sendRequest(ctx context.Context, url string, cfg RunnerConfig, prompt strin
 	if resp.StatusCode >= 500 || resp.StatusCode == 429 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		if retries > 0 {
-			backoff := time.Duration(math.Pow(2, float64(cfg.Retries-retries+1))) * time.Second
+			attempt := cfg.Retries - retries
+			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 			if backoff > 8*time.Second {
 				backoff = 8 * time.Second
 			}
 			time.Sleep(backoff)
-			return sendRequest(ctx, url, cfg, prompt, retries-1)
+			return sendRequest(ctx, url, cfg, prompt, retries-1, useStreamOpts)
 		}
 		return RequestResult{
 			E2ELatency: time.Since(start),
@@ -164,8 +164,10 @@ func parseStreamingResponse(body io.ReadCloser, maxTokens int, start time.Time) 
 		tokenTimestamps []time.Time
 		firstToken     time.Time
 		gotFirst       bool
-		scanner        = bufio.NewScanner(body)
+			scanner        = bufio.NewScanner(body)
 	)
+	// Increase scanner buffer to handle large SSE chunks
+	scanner.Buffer(nil, 1024*1024) // 1MB buffer
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -384,12 +386,13 @@ func medianDuration(d []time.Duration) time.Duration {
 	return sorted[mid]
 }
 
-// truncate shortens a string to maxLen characters.
+// truncate shortens a string to maxLen runes, preserving valid UTF-8.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	return string(runes[:maxLen])
 }
 
 // probeStreamOptions sends a tiny streaming request with stream_options

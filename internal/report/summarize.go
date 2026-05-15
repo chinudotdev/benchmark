@@ -20,7 +20,10 @@ const (
 // Summarize prints results in the requested format.
 func Summarize(dir string, format SummarizeFormat) error {
 	results, err := LoadResults(dir)
-	if err != nil || len(results) == 0 {
+	if err != nil {
+		return fmt.Errorf("reading results from %s: %w", dir, err)
+	}
+	if len(results) == 0 {
 		fmt.Printf("No results in %s\n", dir)
 		return nil
 	}
@@ -52,10 +55,13 @@ func printTable(results []*BenchmarkResult) {
 
 	rows := make([][]string, len(results))
 	for i, r := range results {
-		tpsStr := fmt.Sprintf("%.2f", r.Metrics.OutputTPS)
+		tpsStr := "N/A"
 		tsuStr := ""
-		if r.Metrics.TokensPerSecPerUser > 0 {
-			tsuStr = fmt.Sprintf("%.2f", r.Metrics.TokensPerSecPerUser)
+		if r.Metrics != nil {
+			tpsStr = fmt.Sprintf("%.2f", r.Metrics.OutputTPS)
+			if r.Metrics.TokensPerSecPerUser > 0 {
+				tsuStr = fmt.Sprintf("%.2f", r.Metrics.TokensPerSecPerUser)
+			}
 		}
 		costStr := "N/A"
 		if r.Cost != nil && r.Cost.CostPer1MTokensUSD != nil {

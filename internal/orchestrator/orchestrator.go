@@ -55,15 +55,6 @@ func Run(opts Options) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle signals for cleanup
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		fmt.Printf("\nReceived %v, cleaning up...\n", sig)
-		cancel()
-	}()
-
 	// Detect platform
 	plat, err := detectPlatform(ctx, opts.Platform)
 	if err != nil {
@@ -95,15 +86,19 @@ func Run(opts Options) error {
 		return fmt.Errorf("docker init: %w", err)
 	}
 
-	// Cleanup on exit
-	defer dmgr.Cleanup()
-
-	// Setup signal cleanup
+	// Single signal handler: cancel in-flight ops + stop containers + exit
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		dmgr.Cleanup()
+		sig := <-sigCh
+		fmt.Printf("\nReceived %v, cleaning up...\n", sig)
+		cancel()       // stop in-flight operations
+		dmgr.Cleanup() // stop containers
 		os.Exit(130)
 	}()
+
+	// Cleanup on normal exit
+	defer dmgr.Cleanup()
 
 	// Pull Docker image
 	image := plat.GetDockerImage(opts.DockerImage)

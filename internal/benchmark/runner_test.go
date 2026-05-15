@@ -240,6 +240,7 @@ func TestTruncate(t *testing.T) {
 		{"this is a long string", 10, "this is a "},
 		{"exact", 5, "exact"},
 		{"", 5, ""},
+		{"hello 世界 world", 7, "hello 世"}, // multi-byte safe
 	}
 	for _, tt := range tests {
 		got := truncate(tt.s, tt.maxLen)

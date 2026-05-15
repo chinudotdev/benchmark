@@ -49,24 +49,44 @@ No HTTP frameworks, no ORM, no bloat. stdlib `net/http` for requests, `encoding/
 
 **Test:** `./gpu-benchmark run --model-id Qwen/Qwen3-8B --gpu-rate 2.00` produces the same result as the Bun version.
 
+**Status: ✅ DONE** (commit da42f5c + a306e28)
+
 ---
 
 ## Milestone 2 — Correct Metrics (TTFT, TPOT, SLA, Goodput)
 
 > Make the numbers the framework requires.
 
+**Status: ✅ DONE** (shipped with Milestone 1 — all items below were implemented in the initial Go scaffold)
+
 **Deliverables:**
-- [ ] Streaming SSE parser with per-token timestamp capture
-- [ ] TTFT measurement (time to first token chunk)
-- [ ] TPOT / ITL measurement (inter-token latency distribution)
-- [ ] Tokens/sec/user derivation
-- [ ] SLA band definitions (Interactive, Conversational, Batch)
-- [ ] Goodput computation (throughput at each SLA)
-- [ ] Warmup phase (N discarded requests before measurement)
-- [ ] Cold-start time recording (container start → first healthy response)
-- [ ] Requests/sec (RPS) metric
-- [ ] Extended result JSON with all new metric fields
-- [ ] Updated `summarize` to show TTFT/TPOT/SLA breakdown
+- [x] Streaming SSE parser with per-token timestamp capture
+- [x] TTFT measurement (time to first token chunk)
+- [x] TPOT / ITL measurement (inter-token latency distribution)
+- [x] Tokens/sec/user derivation
+- [x] SLA band definitions (Interactive, Conversational, Batch)
+- [x] Goodput computation (throughput at each SLA)
+- [x] Warmup phase (N discarded requests before measurement)
+- [x] Cold-start time recording (container start → first healthy response)
+- [x] Requests/sec (RPS) metric
+- [x] Extended result JSON with all new metric fields
+- [x] Updated `summarize` to show TTFT/TPOT/SLA breakdown
+
+**Bug fixes applied (from bugs.md review):**
+- [x] BUG 2: `break` in select now uses labeled break to exit for-loop
+- [x] BUG 4: Cold start uses `time.Since(start)` instead of accumulated intervals
+- [x] BUG 5: `useStreamOpts` is now passed to `sendRequest` and conditionally included in payload
+- [x] BUG 6: Single signal handler that does both `cancel()` and `dmgr.Cleanup()`
+- [x] BUG 7: Backoff formula simplified to `2^(attempt)` where attempt = cfg.Retries - retries
+- [x] BUG 8: `printTable` now has nil check on `r.Metrics`
+- [x] BUG 9: `truncate` now uses rune-based slicing for safe UTF-8
+- [x] BUG 10: `FixCachePermissions` now probes write access before running sudo chown
+- [x] BUG 12: `parseVRAM` uses proper rounding instead of integer truncation
+- [x] BUG 13: `Summarize` now returns errors from `LoadResults` instead of swallowing them
+- [x] BUG 14: Warmup uses separate prompt set so benchmark prompts aren't pre-cached
+- [x] BUG 15: SSE scanner buffer increased to 1MB
+- [x] Minor: Removed duplicate `configs/models.yaml`
+- [x] Minor: `go vet` passes clean
 
 **Test:** A streaming run reports TTFT p99, TPOT p99, and goodput at all three SLA bands.
 

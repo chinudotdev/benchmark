@@ -65,7 +65,9 @@ func Download(ctx context.Context, modelID, hfToken string) error {
 	return nil
 }
 
-// FixCachePermissions fixes ownership of the HF cache if it's owned by root.
+// FixCachePermissions fixes ownership of the HF cache if it's owned by root
+// and the current user is not root. Skips chown if already owned by the
+// current user or if the directory doesn't exist.
 func FixCachePermissions() error {
 	cacheDir := hfCacheDir()
 	info, err := os.Stat(cacheDir)
@@ -73,12 +75,21 @@ func FixCachePermissions() error {
 		return nil // doesn't exist yet, nothing to fix
 	}
 
-	whoami, _ := exec.Command("whoami").Output()
-	user := strings.TrimSpace(string(whoami))
-	if user == "" {
-		user = "ubuntu"
+	// Check if we can write to it — if so, no fix needed
+	testFile := filepath.Join(cacheDir, ".gpu-bench-perm-test")
+	if err := os.WriteFile(testFile, []byte("test"), 0o644); err == nil {
+		os.Remove(testFile)
+		return nil // already writable, no permission issue
 	}
 
+	// Directory exists but is not writable — likely owned by root from a sudo docker run
+	whoami, _ := exec.Command("whoami").Output()
+	user := strings.TrimSpace(string(whoami))
+	if user == "" || user == "root" {
+		return nil // running as root or can't determine user
+	}
+
+	log.Printf("Fixing cache permissions (%s owned by another user)...", cacheDir)
 	cmd := exec.Command("sudo", "chown", "-R", user+":"+user, cacheDir)
 	return cmd.Run()
 }
