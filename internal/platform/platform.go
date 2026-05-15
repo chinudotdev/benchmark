@@ -58,12 +58,15 @@ type ContainerConfig struct {
 
 // ModelConfig describes a model to benchmark.
 type ModelConfig struct {
-	ID          string `yaml:"id"           json:"id"`
-	Name        string `yaml:"name"         json:"name"`
-	Quant       string `yaml:"quant"        json:"quant"`
-	MinVRAM_GB  int    `yaml:"min_vram_gb"  json:"min_vram_gb"`
-	TP          int    `yaml:"tp"           json:"tp"`
-	ExtraFlags  string `yaml:"extra_flags"  json:"extra_flags"`
+	ID              string `yaml:"id"               json:"id"`
+	Name            string `yaml:"name"             json:"name"`
+	Quant           string `yaml:"quant"            json:"quant"`
+	MinVRAM_GB      int    `yaml:"min_vram_gb"      json:"min_vram_gb"`
+	TP              int    `yaml:"tp"              json:"tp"`
+	ExtraFlags      string `yaml:"extra_flags"      json:"extra_flags"`
+	Platform        string `yaml:"platform"         json:"platform,omitempty"`         // restrict to platform
+	DockerImage     string `yaml:"docker_image"     json:"docker_image,omitempty"`     // per-model image override
+	ServingBackend  string `yaml:"serving_backend"  json:"serving_backend,omitempty"` // vllm, tt-inference-server, tgi
 }
 
 // RunOptions holds CLI options that influence how a model is run.

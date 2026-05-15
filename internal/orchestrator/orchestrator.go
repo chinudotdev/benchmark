@@ -144,6 +144,13 @@ func Run(opts Options) error {
 		return fmt.Errorf("provide --model-id <id> or --all")
 	}
 
+	// Filter models by platform
+	models = filterModelsByPlatform(models, plat.Name())
+	if len(models) == 0 {
+		return fmt.Errorf("no models match platform %q after filtering", plat.Name())
+	}
+	log.Printf("Running %d models for platform %s", len(models), plat.Name())
+
 	// Run benchmarks
 	for _, model := range models {
 		select {
@@ -219,6 +226,10 @@ func benchmarkModel(
 		Stream:      opts.Stream,
 		Force:       opts.Force,
 		DryRun:      opts.DryRun,
+	}
+	// Per-model Docker image override
+	if model.DockerImage != "" && runOpts.DockerImage == "" {
+		runOpts.DockerImage = model.DockerImage
 	}
 	containerCfg := plat.ContainerConfig(model, runOpts)
 
@@ -620,6 +631,18 @@ func writeSystemInfo(dir string, info *report.SystemInfo) {
 func safeName(name string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", " ", "_")
 	return r.Replace(name)
+}
+
+// filterModelsByPlatform filters models to those matching the current platform.
+// Models without a platform field match all platforms.
+func filterModelsByPlatform(models []platform.ModelConfig, platName string) []platform.ModelConfig {
+	var filtered []platform.ModelConfig
+	for _, m := range models {
+		if m.Platform == "" || m.Platform == platName {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
 }
 
 func formatFloat(f float64) string {

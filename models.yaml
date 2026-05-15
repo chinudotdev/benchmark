@@ -2,12 +2,15 @@
 # Add new models here — the benchmark script picks them up automatically
 #
 # Fields:
-#   id          : HuggingFace model ID
-#   name        : human-readable label for reports
-#   quant       : quantization to use (none, int8, int4, awq, fp8)
-#   min_vram_gb : minimum VRAM required (script skips if GPU has less)
-#   tp           : tensor parallel size (number of GPUs)
-#   extra_flags : any additional vLLM flags for this model
+#   id              : HuggingFace model ID
+#   name            : human-readable label for reports
+#   quant           : quantization to use (none, int8, int4, awq, fp8)
+#   min_vram_gb     : minimum VRAM required (script skips if GPU has less)
+#   tp              : tensor parallel size (number of GPUs)
+#   extra_flags     : any additional vLLM flags for this model
+#   platform        : restrict to specific platform (nvidia, amd, tenstorrent, or empty for all)
+#   docker_image    : override Docker image for this model
+#   serving_backend : backend type (vllm, tt-inference-server, tgi)
 
 models:
   # --- 7-8B class (fast iteration, baseline) ---
@@ -55,3 +58,28 @@ models:
     min_vram_gb: 42
     tp: 1
     extra_flags: ""
+    platform: nvidia
+
+  # --- AMD-specific models ---
+  # ROCm-optimized models use the same HuggingFace IDs
+  # but may need different Docker images and flags
+  - id: Qwen/Qwen3-8B
+    name: Qwen3-8B-ROCm
+    quant: none
+    min_vram_gb: 18
+    tp: 1
+    extra_flags: ""
+    platform: amd
+    docker_image: "rocm/vllm:latest"
+
+  # --- Tenstorrent-specific models ---
+  # TT-optimized models may use different serving backends
+  - id: Qwen/Qwen3-8B
+    name: Qwen3-8B-TT
+    quant: none
+    min_vram_gb: 12
+    tp: 1
+    extra_flags: ""
+    platform: tenstorrent
+    docker_image: "ghcr.io/tenstorrent/tt-inference-server:latest"
+    serving_backend: tt-inference-server

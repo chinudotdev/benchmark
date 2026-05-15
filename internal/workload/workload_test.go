@@ -21,6 +21,9 @@ models:
     min_vram_gb: 42
     tp: 1
     extra_flags: ""
+    platform: nvidia
+    docker_image: "vllm/vllm-openai:latest"
+    serving_backend: vllm
 `
 
 func writeTestYAML(t *testing.T, content string) string {
@@ -66,6 +69,16 @@ func TestLoadModels(t *testing.T) {
 	}
 	if models[1].Quant != "awq" {
 		t.Errorf("models[1].Quant = %q", models[1].Quant)
+	}
+	// Platform-specific fields
+	if models[1].Platform != "nvidia" {
+		t.Errorf("models[1].Platform = %q, want nvidia", models[1].Platform)
+	}
+	if models[1].DockerImage != "vllm/vllm-openai:latest" {
+		t.Errorf("models[1].DockerImage = %q", models[1].DockerImage)
+	}
+	if models[1].ServingBackend != "vllm" {
+		t.Errorf("models[1].ServingBackend = %q", models[1].ServingBackend)
 	}
 }
 
